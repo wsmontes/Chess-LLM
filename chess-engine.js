@@ -444,45 +444,163 @@ class ChessEngine {
             this.halfmoveClock++;
         }
 
-        // Check for game ending conditions for the current player (who just switched)
+        // Check for game ending conditions for the current player (who just moved)
         this.updateGameEndingConditions();
     }
 
     updateGameEndingConditions() {
-        // Wait for the player switch to complete before checking game state
         const currentColor = this.currentPlayer;
-        const hasValidMoves = this.hasValidMoves(currentColor);
         const inCheck = this.isKingInCheck(currentColor);
+        const hasValidMoves = this.hasValidMovesForPlayer(currentColor);
 
-        if (!hasValidMoves) {
-            if (inCheck) {
-                this.gameState = 'checkmate';
-            } else {
-                this.gameState = 'stalemate';
-            }
+        // Modified logic: Let LLM decide checkmate, engine only handles stalemate and draws
+        if (!inCheck && !hasValidMoves) {
+            this.gameState = 'stalemate';
         } else if (this.halfmoveClock >= 100) {
             this.gameState = 'draw';
         } else if (inCheck) {
+            // Always set to 'check' - let LLM decide if it's checkmate
             this.gameState = 'check';
         } else {
             this.gameState = 'playing';
         }
     }
 
-    hasValidMoves(color) {
+    // Add method to manually set checkmate (called by LLM analysis)
+    setCheckmate() {
+        this.gameState = 'checkmate';
+    }
+
+    // Add method to check if position is actually checkmate (for LLM analysis)
+    isActualCheckmate(color) {
+        const inCheck = this.isKingInCheck(color);
+        const hasValidMoves = this.hasValidMovesForPlayer(color);
+        return inCheck && !hasValidMoves;
+    }
+
+    // Add method to get legal moves for any color (used by LLM analysis)
+    getLegalMovesForColor(color) {
+        const legalMoves = [];
+        
         for (let rank = 0; rank < 8; rank++) {
             for (let file = 0; file < 8; file++) {
                 const piece = this.board[rank][file];
                 if (piece && piece.color === color) {
                     const square = this.squareToString(file, rank);
-                    const moves = this.getValidMoves(square);
-                    if (moves.length > 0) {
+                    const moves = this.getValidMovesForSquare(square);
+                    moves.forEach(move => {
+                        const notation = this.generateMoveNotation(square, move, piece, this.getPiece(move));
+                        legalMoves.push(notation);
+                    });
+                }
+            }
+        }
+        
+        return legalMoves.sort();
+    }
+
+    hasValidMovesForPlayer(color) {
+        // Check if the player has any legal moves that don't leave their king in check
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.board[rank][file];
+                if (piece && piece.color === color) {
+                    const square = this.squareToString(file, rank);
+                    const validMoves = this.getValidMovesForSquare(square);
+                    if (validMoves.length > 0) {
                         return true;
                     }
                 }
             }
         }
         return false;
+    }
+
+    getValidMovesForSquare(square) {
+        const piece = this.getPiece(square);
+        if (!piece) return [];
+
+        const moves = this.generatePieceMoves(square, piece);
+        
+        // Filter out moves that would leave the king in check
+        return moves.filter(move => !this.wouldLeaveKingInCheck(square, move));
+    }
+
+    getValidMoves(square) {
+        const piece = this.getPiece(square);
+        if (!piece || piece.color !== this.currentPlayer) {
+            return [];
+        }
+
+        return this.getValidMovesForSquare(square);
+    }
+
+    hasValidMoves(color) {
+        return this.hasValidMovesForPlayer(color);
+    }
+
+    wouldLeaveKingInCheck(fromSquare, toSquare) {
+        const piece = this.getPiece(fromSquare);
+        if (!piece) return false;
+        
+        const capturedPiece = this.getPiece(toSquare);
+        const [fromFile, fromRank] = this.parseSquare(fromSquare);
+        const [toFile, toRank] = this.parseSquare(toSquare);
+        
+        // Handle en passant capture simulation
+        let enPassantCaptureSquare = null;
+        let enPassantCapturedPiece = null;
+        
+        if (piece.type === 'pawn' && this.enPassantTarget === toSquare) {
+            const capturedPawnRank = piece.color === 'white' ? toRank - 1 : toRank + 1;
+            enPassantCaptureSquare = this.squareToString(toFile, capturedPawnRank);
+            enPassantCapturedPiece = this.getPiece(enPassantCaptureSquare);
+        }
+        
+        // Handle castling simulation
+        let rookFromSquare = null;
+        let rookToSquare = null;
+        let rook = null;
+        
+        if (piece.type === 'king' && Math.abs(toFile - fromFile) === 2) {
+            const rookFromFile = toFile > fromFile ? 7 : 0;
+            const rookToFile = toFile > fromFile ? 5 : 3;
+            rookFromSquare = this.squareToString(rookFromFile, fromRank);
+            rookToSquare = this.squareToString(rookToFile, fromRank);
+            rook = this.getPiece(rookFromSquare);
+        }
+        
+        // Make temporary move
+        this.setPiece(toSquare, piece);
+        this.setPiece(fromSquare, null);
+        
+        // Handle special move simulations
+        if (enPassantCaptureSquare) {
+            this.setPiece(enPassantCaptureSquare, null);
+        }
+        
+        if (rookFromSquare && rookToSquare && rook) {
+            this.setPiece(rookToSquare, rook);
+            this.setPiece(rookFromSquare, null);
+        }
+        
+        const inCheck = this.isKingInCheck(piece.color);
+        
+        // Undo temporary move
+        this.setPiece(fromSquare, piece);
+        this.setPiece(toSquare, capturedPiece);
+        
+        // Undo special moves
+        if (enPassantCaptureSquare) {
+            this.setPiece(enPassantCaptureSquare, enPassantCapturedPiece);
+        }
+        
+        if (rookFromSquare && rookToSquare && rook) {
+            this.setPiece(rookFromSquare, rook);
+            this.setPiece(rookToSquare, null);
+        }
+        
+        return inCheck;
     }
 
     isKingInCheck(color) {
@@ -513,15 +631,14 @@ class ChessEngine {
         return null;
     }
 
-    isSquareAttacked(square, byColor, board = null) {
-        const checkBoard = board || this.board;
-        
+    isSquareAttacked(square, byColor) {
         for (let rank = 0; rank < 8; rank++) {
             for (let file = 0; file < 8; file++) {
-                const piece = checkBoard[rank][file];
+                const piece = this.board[rank][file];
                 if (piece && piece.color === byColor) {
                     const attackerSquare = this.squareToString(file, rank);
-                    const moves = this.generatePieceMoves(attackerSquare, piece);
+                    // Generate attacking moves (without castling to avoid infinite recursion)
+                    const moves = this.generatePieceMoves(attackerSquare, piece, false);
                     if (moves.includes(square)) {
                         return true;
                     }
@@ -532,12 +649,10 @@ class ChessEngine {
         return false;
     }
 
-    isSquareAttackedNoCastling(square, byColor, board = null) {
-        const checkBoard = board || this.board;
-        
+    isSquareAttackedNoCastling(square, byColor) {
         for (let rank = 0; rank < 8; rank++) {
             for (let file = 0; file < 8; file++) {
-                const piece = checkBoard[rank][file];
+                const piece = this.board[rank][file];
                 if (piece && piece.color === byColor) {
                     const attackerSquare = this.squareToString(file, rank);
                     // Generate moves without castling to avoid circular dependency
@@ -550,25 +665,6 @@ class ChessEngine {
         }
         
         return false;
-    }
-
-    wouldLeaveKingInCheck(fromSquare, toSquare) {
-        const piece = this.getPiece(fromSquare);
-        if (!piece) return false;
-        
-        const capturedPiece = this.getPiece(toSquare);
-        
-        // Make temporary move
-        this.setPiece(toSquare, piece);
-        this.setPiece(fromSquare, null);
-        
-        const inCheck = this.isKingInCheck(piece.color);
-        
-        // Undo temporary move
-        this.setPiece(fromSquare, piece);
-        this.setPiece(toSquare, capturedPiece);
-        
-        return inCheck;
     }
 
     cloneBoard() {

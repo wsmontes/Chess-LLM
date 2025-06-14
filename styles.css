@@ -382,23 +382,41 @@ body {
     color: var(--text-primary);
 }
 
-.setting-group input[type="text"] {
+.setting-group input[type="text"],
+.setting-group input[type="password"],
+.setting-group select {
     width: 100%;
     padding: 10px 12px;
     border: 2px solid var(--border-color);
     border-radius: 6px;
     font-size: 0.9rem;
     transition: border-color 0.2s ease;
+    background: var(--card-background);
+    color: var(--text-primary);
 }
 
-.setting-group input[type="text"]:focus {
+.setting-group input[type="text"]:focus,
+.setting-group input[type="password"]:focus,
+.setting-group select:focus {
     outline: none;
     border-color: var(--accent-color);
+}
+
+.setting-group select {
+    cursor: pointer;
 }
 
 .setting-group input[type="range"] {
     width: calc(100% - 50px);
     margin-right: 10px;
+}
+
+.setting-help {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-style: italic;
 }
 
 #temperature-value {
@@ -432,6 +450,12 @@ body {
 
 .connection-status i {
     font-size: 0.8rem;
+}
+
+/* Provider-specific settings transitions */
+#lmstudio-settings,
+#openai-settings {
+    transition: opacity 0.3s ease;
 }
 
 /* Modal Styles */
@@ -678,6 +702,92 @@ body {
     50% {
         opacity: 0.5;
     }
+}
+
+/* API Key Status and Management */
+.api-key-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.api-key-status.saved {
+    background: rgba(76, 175, 80, 0.1);
+    color: #4CAF50;
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.api-key-status.missing {
+    background: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+    border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.api-key-status.error {
+    background: rgba(255, 152, 0, 0.1);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.api-key-status i {
+    font-size: 0.9rem;
+}
+
+.clear-api-key-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.clear-api-key-btn:hover {
+    background: rgba(244, 67, 54, 0.1);
+    border-color: #f44336;
+    color: #f44336;
+}
+
+.clear-api-key-btn i {
+    font-size: 0.75rem;
+}
+
+/* Enhanced input styling for API key field */
+#openai-api-key {
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
+}
+
+#openai-api-key:focus {
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+}
+
+/* Security notice styling */
+.security-notice {
+    background: rgba(33, 150, 243, 0.1);
+    border: 1px solid rgba(33, 150, 243, 0.3);
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: #2196F3;
+    line-height: 1.4;
+}
+
+.security-notice i {
+    margin-right: 6px;
 }
 
 /* Responsive Design */

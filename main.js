@@ -18,6 +18,9 @@ class ChessApp {
 
     initializeApp() {
         try {
+            // Clean up old stored API keys on startup
+            this.cleanupSecureStorage();
+
             // Initialize chess engine
             this.engine = new ChessEngine();
             console.log('Chess engine initialized');
@@ -47,6 +50,16 @@ class ChessApp {
         } catch (error) {
             console.error('Failed to initialize application:', error);
             this.showInitializationError(error);
+        }
+    }
+
+    cleanupSecureStorage() {
+        try {
+            // Clean up API keys older than 30 days
+            const secureStorage = new SecureStorage();
+            secureStorage.cleanup();
+        } catch (error) {
+            console.warn('Failed to cleanup secure storage:', error);
         }
     }
 

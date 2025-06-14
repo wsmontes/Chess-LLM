@@ -14,12 +14,18 @@ class ChessUI {
         this.isThinkingVisible = true;
         this.currentThinkingSteps = [];
         
+        // Initialize secure storage for API keys
+        this.secureStorage = new SecureStorage();
+        
         this.initializeBoard();
         this.initializeEventListeners();
         this.updateDisplay();
         
         // Set up LLM thinking callback
         this.llm.setThinkingCallback((steps) => this.updateThinkingDisplay(steps));
+        
+        // Load saved settings
+        this.loadSettings();
     }
 
     initializeBoard() {
@@ -112,20 +118,58 @@ class ChessUI {
         });
 
         // LLM settings
+        document.getElementById('llm-provider').addEventListener('change', (e) => {
+            this.handleProviderChange(e.target.value);
+        });
+
         document.getElementById('llm-temperature').addEventListener('input', (e) => {
             const value = parseFloat(e.target.value);
             document.getElementById('temperature-value').textContent = value.toFixed(1);
             this.llm.setTemperature(value);
+            this.saveSettings();
         });
 
+        // LM Studio settings
         document.getElementById('llm-model').addEventListener('change', (e) => {
             this.llm.setModel(e.target.value);
+            this.saveSettings();
         });
 
         document.getElementById('llm-endpoint').addEventListener('change', (e) => {
             this.llm.setEndpoint(e.target.value);
+            this.saveSettings();
             this.testConnection();
         });
+
+        // OpenAI settings - Load API key from secure storage
+        document.getElementById('openai-api-key').addEventListener('input', (e) => {
+            const apiKey = e.target.value.trim();
+            this.llm.setOpenAIApiKey(apiKey);
+            
+            // Debounce saving to avoid too frequent saves
+            clearTimeout(this.apiKeySaveTimeout);
+            this.apiKeySaveTimeout = setTimeout(() => {
+                this.saveSettings();
+                if (apiKey) {
+                    this.testConnection();
+                }
+            }, 1000);
+        });
+
+        // Add paste event handler for API key
+        document.getElementById('openai-api-key').addEventListener('paste', (e) => {
+            setTimeout(() => {
+                const apiKey = e.target.value.trim();
+                if (apiKey.startsWith('sk-')) {
+                    this.llm.setOpenAIApiKey(apiKey);
+                    this.saveSettings();
+                    this.testConnection();
+                }
+            }, 100);
+        });
+
+        // Add clear API key button functionality
+        this.addClearApiKeyButton();
 
         // Thinking toggle
         this.thinkingToggle.addEventListener('change', (e) => {
@@ -252,16 +296,8 @@ class ChessUI {
             this.updateDisplay();
             this.addMoveToHistory(move);
             
-            // Check game state AFTER the move is complete
-            if (this.engine.gameState !== 'playing') {
-                this.handleGameEnd();
-                return;
-            }
-
-            // Get LLM move if it's black's turn
-            if (this.engine.currentPlayer === 'black') {
-                await this.getLLMMove(); // Reset attempt count for new move
-            }
+            // Check if we need to analyze for checkmate
+            await this.handleGameStateAfterMove();
 
         } catch (error) {
             console.error('Error making move:', error);
@@ -270,10 +306,47 @@ class ChessUI {
         }
     }
 
+    async handleGameStateAfterMove() {
+        // If someone is in check, ask LLM to analyze if it's checkmate
+        if (this.engine.gameState === 'check') {
+            const playerInCheck = this.engine.currentPlayer;
+            
+            // Show analysis indicator
+            this.updateStatus(`Analyzing position... ${playerInCheck} is in check`);
+            
+            try {
+                const analysis = await this.llm.analyzeCheckPosition(
+                    this.engine, 
+                    this.engine.moveHistory, 
+                    playerInCheck
+                );
+                
+                if (analysis === 'checkmate') {
+                    this.engine.setCheckmate();
+                }
+                
+            } catch (error) {
+                console.warn('Failed to analyze check position:', error);
+                // Continue with just 'check' status
+            }
+        }
+        
+        // Handle game ending
+        if (this.engine.gameState === 'checkmate' || this.engine.gameState === 'stalemate' || this.engine.gameState === 'draw') {
+            this.handleGameEnd();
+            return;
+        }
+
+        // Get LLM move if it's black's turn and game is still playing
+        if (this.engine.currentPlayer === 'black' && this.engine.gameState !== 'checkmate') {
+            await this.getLLMMove();
+        }
+    }
+
     async getLLMMove(previousAttempt = null, attemptCount = 0) {
         if (this.isWaitingForLLM) return;
         
-        const maxAttempts = 3; // Maximum retry attempts
+        const maxAttempts = 3;
         
         this.isWaitingForLLM = true;
         this.showThinking(true);
@@ -295,7 +368,7 @@ class ChessUI {
                 throw new Error('Not connected to LM Studio: ' + connectionTest.message);
             }
 
-            // Get move from LLM with streaming thinking
+            // Get move from LLM
             const moveNotation = await this.llm.getChessMove(this.engine, this.engine.moveHistory, previousAttempt);
             
             // Validate the move before executing
@@ -305,7 +378,6 @@ class ChessUI {
                 this.addValidationErrorToThinking(moveNotation, validationResult.reason);
                 
                 if (attemptCount < maxAttempts - 1) {
-                    // Retry with feedback
                     this.showThinkingStreamIndicator(false);
                     const newAttempt = {
                         move: moveNotation,
@@ -314,7 +386,6 @@ class ChessUI {
                     };
                     return await this.getLLMMove(newAttempt, attemptCount + 1);
                 } else {
-                    // Max attempts reached, fall back to random move
                     throw new Error(`LLM failed to provide valid move after ${maxAttempts} attempts. Last attempt: "${moveNotation}" - ${validationResult.reason}`);
                 }
             }
@@ -331,10 +402,8 @@ class ChessUI {
                     this.addSuccessAfterRetryToThinking(attemptCount + 1);
                 }
                 
-                // Check game state
-                if (this.engine.gameState !== 'playing') {
-                    this.handleGameEnd();
-                }
+                // Handle game state after LLM move
+                await this.handleGameStateAfterMove();
             }
 
         } catch (error) {
@@ -384,7 +453,7 @@ class ChessUI {
             if (!matchingMove) {
                 let reason = `Move "${moveNotation}" is not legal in the current position.`;
                 
-                // Provide specific feedback based on the attempted move
+                // Provide detailed feedback based on the attempted move
                 if (/^[KQRBN][a-h][1-8]$/.test(moveNotation)) {
                     const pieceType = {
                         'K': 'king', 'Q': 'queen', 'R': 'rook',
@@ -396,8 +465,9 @@ class ChessUI {
                     if (piecesOfType.length === 0) {
                         reason += ` No ${pieceType} can move right now.`;
                     } else {
-                        const pieceSquares = piecesOfType.map(m => m.from);
-                        reason += ` Your ${pieceType}(s) on ${pieceSquares.join(', ')} cannot reach ${destination}.`;
+                        const pieceSquares = [...new Set(piecesOfType.map(m => m.from))];
+                        const validDestinations = [...new Set(piecesOfType.map(m => m.to))];
+                        reason += ` Your ${pieceType}(s) on ${pieceSquares.join(', ')} can move to: ${validDestinations.join(', ')}, but not to ${destination}.`;
                     }
                 } else if (/^[a-h][1-8]$/.test(moveNotation)) {
                     const destination = moveNotation;
@@ -405,9 +475,16 @@ class ChessUI {
                     if (pawnMoves.length === 0) {
                         reason += ` No pawns can move right now.`;
                     } else {
-                        reason += ` No pawn can reach ${destination}.`;
+                        const validPawnDestinations = [...new Set(pawnMoves.map(m => m.to))];
+                        reason += ` Your pawns can move to: ${validPawnDestinations.join(', ')}, but not to ${destination}.`;
                     }
+                } else if (moveNotation.includes('x')) {
+                    reason += ` This appears to be a capture move, but it's not valid. Check if the piece can actually reach the target square and if there's a piece to capture.`;
+                } else {
+                    reason += ` Please use standard algebraic notation (e.g., e5, Nf6, Bxc4).`;
                 }
+                
+                reason += `\n\nAvailable moves: ${availableMoves.slice(0, 10).join(', ')}${availableMoves.length > 10 ? '...' : ''}`;
                 
                 return {
                     isValid: false,
@@ -863,8 +940,7 @@ class ChessUI {
 
     updateStatus() {
         if (this.isWaitingForLLM) {
-            this.statusText.textContent = 'LLM is thinking...';
-            return;
+            return; // Don't override status when LLM is thinking
         }
 
         let status = '';
@@ -873,7 +949,7 @@ class ChessUI {
 
         switch (this.engine.gameState) {
             case 'check':
-                status = `${playerDescription} - ${currentPlayerName} is in check!`;
+                status = `${playerDescription} - ${currentPlayerName} is in check! Find a way to escape.`;
                 break;
             case 'checkmate':
                 const winner = this.engine.currentPlayer === 'white' ? 'Black (LLM)' : 'White (You)';
@@ -1040,6 +1116,301 @@ class ChessUI {
         this.updateConnectionStatus(result);
     }
 
+    handleProviderChange(provider) {
+        this.llm.setProvider(provider);
+        
+        // Show/hide relevant settings
+        const lmstudioSettings = document.getElementById('lmstudio-settings');
+        const openaiSettings = document.getElementById('openai-settings');
+        const aiPlayerLabel = document.getElementById('ai-player-label');
+        
+        if (provider === 'openai') {
+            lmstudioSettings.style.display = 'none';
+            openaiSettings.style.display = 'block';
+            aiPlayerLabel.textContent = 'OpenAI (Black)';
+        } else {
+            lmstudioSettings.style.display = 'block';
+            openaiSettings.style.display = 'none';
+            aiPlayerLabel.textContent = 'LLM (Black)';
+        }
+        
+        this.saveSettings();
+        this.testConnection();
+    }
+
+    loadSettings() {
+        try {
+            const settings = JSON.parse(localStorage.getItem('chess-llm-settings') || '{}');
+            
+            // Provider settings
+            if (settings.provider) {
+                this.llm.setProvider(settings.provider);
+                document.getElementById('llm-provider').value = settings.provider;
+                this.handleProviderChange(settings.provider);
+            }
+            
+            // LM Studio settings
+            if (settings.lmstudio) {
+                if (settings.lmstudio.model) {
+                    this.llm.setModel(settings.lmstudio.model);
+                    document.getElementById('llm-model').value = settings.lmstudio.model;
+                }
+                if (settings.lmstudio.endpoint) {
+                    this.llm.setEndpoint(settings.lmstudio.endpoint);
+                    document.getElementById('llm-endpoint').value = settings.lmstudio.endpoint;
+                }
+            }
+            
+            // OpenAI settings - Load API key from secure storage
+            if (settings.openai) {
+                // Load API key from secure storage
+                const apiKey = this.secureStorage.getApiKey('openai');
+                if (apiKey) {
+                    this.llm.setOpenAIApiKey(apiKey);
+                    document.getElementById('openai-api-key').value = apiKey;
+                }
+                
+                if (settings.openai.model) {
+                    this.llm.setOpenAIModel(settings.openai.model);
+                    document.getElementById('openai-model').value = settings.openai.model;
+                }
+            }
+            
+            // Temperature
+            if (settings.temperature !== undefined) {
+                this.llm.setTemperature(settings.temperature);
+                document.getElementById('llm-temperature').value = settings.temperature;
+                document.getElementById('temperature-value').textContent = settings.temperature.toFixed(1);
+            }
+            
+            // Show API key status
+            this.updateApiKeyStatus();
+            
+        } catch (error) {
+            console.warn('Could not load settings:', error);
+            this.showApiKeyError('Failed to load saved settings');
+        }
+    }
+
+    saveSettings() {
+        try {
+            // Save API key to secure storage
+            if (this.llm.openaiApiKey) {
+                this.secureStorage.setApiKey('openai', this.llm.openaiApiKey);
+            }
+            
+            const settings = {
+                provider: this.llm.provider,
+                lmstudio: {
+                    model: this.llm.model,
+                    endpoint: this.llm.endpoint
+                },
+                openai: {
+                    // Don't store API key in localStorage for security
+                    model: this.llm.openaiModel
+                },
+                temperature: this.llm.temperature
+            };
+            
+            localStorage.setItem('chess-llm-settings', JSON.stringify(settings));
+            this.updateApiKeyStatus();
+            
+        } catch (error) {
+            console.warn('Could not save settings:', error);
+            this.showApiKeyError('Failed to save settings');
+        }
+    }
+
+    updateApiKeyStatus() {
+        const apiKeyInput = document.getElementById('openai-api-key');
+        const hasApiKey = this.llm.openaiApiKey && this.llm.openaiApiKey.length > 0;
+        
+        // Add visual indicator for API key status
+        const statusElement = this.getOrCreateApiKeyStatus();
+        
+        if (hasApiKey) {
+            statusElement.className = 'api-key-status saved';
+            statusElement.innerHTML = '<i class="fas fa-check-circle"></i> API Key Saved';
+            apiKeyInput.style.borderColor = '#4CAF50';
+        } else {
+            statusElement.className = 'api-key-status missing';
+            statusElement.innerHTML = '<i class="fas fa-exclamation-circle"></i> API Key Required';
+            apiKeyInput.style.borderColor = '#f44336';
+        }
+    }
+
+    getOrCreateApiKeyStatus() {
+        let statusElement = document.getElementById('api-key-status');
+        if (!statusElement) {
+            statusElement = document.createElement('div');
+            statusElement.id = 'api-key-status';
+            statusElement.className = 'api-key-status';
+            
+            const apiKeyInput = document.getElementById('openai-api-key');
+            apiKeyInput.parentNode.appendChild(statusElement);
+        }
+        return statusElement;
+    }
+
+    showApiKeyError(message) {
+        const statusElement = this.getOrCreateApiKeyStatus();
+        statusElement.className = 'api-key-status error';
+        statusElement.innerHTML = `<i class="fas fa-exclamation-triangle"></i> ${message}`;
+    }
+
+    // Enhanced API key input handler
+    initializeEventListeners() {
+        // Board click events
+        this.boardElement.addEventListener('click', (e) => {
+            if (this.isWaitingForLLM) return;
+            
+            const square = e.target.closest('.square');
+            if (square) {
+                this.handleSquareClick(square.dataset.square);
+            }
+        });
+
+        // Drag and drop events
+        this.boardElement.addEventListener('dragstart', (e) => {
+            if (this.isWaitingForLLM) return;
+            
+            const square = e.target.closest('.square');
+            if (square && e.target.classList.contains('piece')) {
+                this.handleDragStart(square.dataset.square, e);
+            }
+        });
+
+        this.boardElement.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        this.boardElement.addEventListener('drop', (e) => {
+            if (this.isWaitingForLLM) return;
+            
+            e.preventDefault();
+            const square = e.target.closest('.square');
+            if (square) {
+                this.handleDrop(square.dataset.square);
+            }
+        });
+
+        // Control buttons
+        document.getElementById('new-game-btn').addEventListener('click', () => {
+            this.startNewGame();
+        });
+
+        document.getElementById('undo-btn').addEventListener('click', () => {
+            this.undoMove();
+        });
+
+        document.getElementById('hint-btn').addEventListener('click', () => {
+            this.getHint();
+        });
+
+        // Modal buttons
+        document.getElementById('new-game-modal-btn').addEventListener('click', () => {
+            this.closeModal();
+            this.startNewGame();
+        });
+
+        document.getElementById('close-modal-btn').addEventListener('click', () => {
+            this.closeModal();
+        });
+
+        // LLM settings
+        document.getElementById('llm-provider').addEventListener('change', (e) => {
+            this.handleProviderChange(e.target.value);
+        });
+
+        document.getElementById('llm-temperature').addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            document.getElementById('temperature-value').textContent = value.toFixed(1);
+            this.llm.setTemperature(value);
+            this.saveSettings();
+        });
+
+        // LM Studio settings
+        document.getElementById('llm-model').addEventListener('change', (e) => {
+            this.llm.setModel(e.target.value);
+            this.saveSettings();
+        });
+
+        document.getElementById('llm-endpoint').addEventListener('change', (e) => {
+            this.llm.setEndpoint(e.target.value);
+            this.saveSettings();
+            this.testConnection();
+        });
+
+        // OpenAI settings with enhanced API key handling
+        document.getElementById('openai-api-key').addEventListener('input', (e) => {
+            const apiKey = e.target.value.trim();
+            this.llm.setOpenAIApiKey(apiKey);
+            
+            // Debounce saving to avoid too frequent saves
+            clearTimeout(this.apiKeySaveTimeout);
+            this.apiKeySaveTimeout = setTimeout(() => {
+                this.saveSettings();
+                if (apiKey) {
+                    this.testConnection();
+                }
+            }, 1000);
+        });
+
+        // Add paste event handler for API key
+        document.getElementById('openai-api-key').addEventListener('paste', (e) => {
+            setTimeout(() => {
+                const apiKey = e.target.value.trim();
+                if (apiKey.startsWith('sk-')) {
+                    this.llm.setOpenAIApiKey(apiKey);
+                    this.saveSettings();
+                    this.testConnection();
+                }
+            }, 100);
+        });
+
+        // Add clear API key button functionality
+        this.addClearApiKeyButton();
+
+        // Thinking toggle
+        this.thinkingToggle.addEventListener('change', (e) => {
+            this.isThinkingVisible = e.target.checked;
+            this.thinkingContent.classList.toggle('hidden', !this.isThinkingVisible);
+        });
+
+        // Test connection on load
+        this.testConnection();
+    }
+
+    addClearApiKeyButton() {
+        const apiKeyGroup = document.getElementById('openai-api-key').parentNode;
+        
+        let clearButton = document.getElementById('clear-api-key-btn');
+        if (!clearButton) {
+            clearButton = document.createElement('button');
+            clearButton.id = 'clear-api-key-btn';
+            clearButton.type = 'button';
+            clearButton.className = 'clear-api-key-btn';
+            clearButton.innerHTML = '<i class="fas fa-times"></i> Clear API Key';
+            clearButton.title = 'Clear saved API key';
+            
+            clearButton.addEventListener('click', () => {
+                if (confirm('Are you sure you want to clear the saved API key?')) {
+                    this.clearApiKey();
+                }
+            });
+            
+            apiKeyGroup.appendChild(clearButton);
+        }
+    }
+
+    clearApiKey() {
+        this.llm.setOpenAIApiKey('');
+        document.getElementById('openai-api-key').value = '';
+        this.secureStorage.removeApiKey('openai');
+        this.saveSettings();
+        this.updateApiKeyStatus();
+    }
+
     updateConnectionStatus(result) {
         const statusElement = document.getElementById('connection-status');
         const icon = statusElement.querySelector('i');
@@ -1050,7 +1421,8 @@ class ChessUI {
         if (result.success) {
             statusElement.classList.add('connected');
             icon.className = 'fas fa-circle';
-            text.textContent = 'Connected';
+            const providerName = this.llm.provider === 'openai' ? 'OpenAI' : 'LM Studio';
+            text.textContent = `Connected to ${providerName}`;
         } else {
             statusElement.classList.add('error');
             icon.className = 'fas fa-circle';
@@ -1095,6 +1467,188 @@ class ChessUI {
 
         // Auto-scroll to bottom
         this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+}
+
+// Secure storage class for API keys
+class SecureStorage {
+    constructor() {
+        this.storageKey = 'chess-llm-secure';
+        this.encryptionKey = this.getOrCreateEncryptionKey();
+    }
+
+    getOrCreateEncryptionKey() {
+        let key = localStorage.getItem('chess-llm-key');
+        if (!key) {
+            // Generate a simple key based on browser fingerprint
+            key = this.generateBrowserKey();
+            localStorage.setItem('chess-llm-key', key);
+        }
+        return key;
+    }
+
+    generateBrowserKey() {
+        // Create a simple browser fingerprint for basic obfuscation
+        const fingerprint = [
+            navigator.userAgent.substring(0, 50), // Limit length to avoid encoding issues
+            navigator.language,
+            screen.width + 'x' + screen.height,
+            new Date().getTimezoneOffset().toString()
+        ].join('|');
+        
+        // Simple hash function
+        let hash = 0;
+        for (let i = 0; i < fingerprint.length; i++) {
+            const char = fingerprint.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        
+        return Math.abs(hash).toString(36);
+    }
+
+    simpleEncrypt(text, key) {
+        if (!text) return '';
+        
+        try {
+            let result = '';
+            for (let i = 0; i < text.length; i++) {
+                const char = text.charCodeAt(i);
+                const keyChar = key.charCodeAt(i % key.length);
+                result += String.fromCharCode(char ^ keyChar);
+            }
+            
+            // Use base64url encoding to avoid Latin1 issues
+            return this.base64UrlEncode(result);
+        } catch (error) {
+            console.error('Encryption error:', error);
+            return '';
+        }
+    }
+
+    simpleDecrypt(encryptedText, key) {
+        if (!encryptedText) return '';
+        
+        try {
+            const decoded = this.base64UrlDecode(encryptedText);
+            let result = '';
+            
+            for (let i = 0; i < decoded.length; i++) {
+                const char = decoded.charCodeAt(i);
+                const keyChar = key.charCodeAt(i % key.length);
+                result += String.fromCharCode(char ^ keyChar);
+            }
+            
+            return result;
+        } catch (error) {
+            console.warn('Failed to decrypt API key:', error);
+            return '';
+        }
+    }
+
+    base64UrlEncode(str) {
+        // Convert to bytes and then to base64url
+        const bytes = new Uint8Array(str.length);
+        for (let i = 0; i < str.length; i++) {
+            bytes[i] = str.charCodeAt(i) & 0xFF;
+        }
+        
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        
+        return btoa(binary)
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=/g, '');
+    }
+
+    base64UrlDecode(str) {
+        // Add padding if needed
+        str += '='.repeat((4 - str.length % 4) % 4);
+        
+        // Convert back from base64url to base64
+        str = str.replace(/-/g, '+').replace(/_/g, '/');
+        
+        const binary = atob(str);
+        return binary;
+    }
+
+    setApiKey(provider, apiKey) {
+        try {
+            const encrypted = this.simpleEncrypt(apiKey, this.encryptionKey);
+            const storage = this.getSecureStorage();
+            storage[provider] = {
+                key: encrypted,
+                timestamp: Date.now()
+            };
+            localStorage.setItem(this.storageKey, JSON.stringify(storage));
+        } catch (error) {
+            console.error('Failed to save API key:', error);
+            throw new Error('Failed to save API key securely');
+        }
+    }
+
+    getApiKey(provider) {
+        try {
+            const storage = this.getSecureStorage();
+            const data = storage[provider];
+            
+            if (!data) return '';
+            
+            // Check if key is older than 30 days
+            const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+            if (Date.now() - data.timestamp > thirtyDays) {
+                this.removeApiKey(provider);
+                return '';
+            }
+            
+            return this.simpleDecrypt(data.key, this.encryptionKey);
+        } catch (error) {
+            console.warn('Failed to load API key:', error);
+            return '';
+        }
+    }
+
+    removeApiKey(provider) {
+        try {
+            const storage = this.getSecureStorage();
+            delete storage[provider];
+            localStorage.setItem(this.storageKey, JSON.stringify(storage));
+        } catch (error) {
+            console.error('Failed to remove API key:', error);
+        }
+    }
+
+    getSecureStorage() {
+        try {
+            return JSON.parse(localStorage.getItem(this.storageKey) || '{}');
+        } catch (error) {
+            return {};
+        }
+    }
+
+    // Clean up old keys
+    cleanup() {
+        try {
+            const storage = this.getSecureStorage();
+            const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+            let cleaned = false;
+            
+            for (const [provider, data] of Object.entries(storage)) {
+                if (data && data.timestamp && Date.now() - data.timestamp > thirtyDays) {
+                    delete storage[provider];
+                    cleaned = true;
+                }
+            }
+            
+            if (cleaned) {
+                localStorage.setItem(this.storageKey, JSON.stringify(storage));
+            }
+        } catch (error) {
+            console.warn('Cleanup failed:', error);
+        }
     }
 }
 

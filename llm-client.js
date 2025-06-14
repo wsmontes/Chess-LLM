@@ -1,28 +1,39 @@
 class LLMClient {
     constructor() {
+        this.provider = 'lmstudio'; // 'lmstudio' or 'openai'
         this.endpoint = 'http://localhost:1234';
         this.model = 'google/gemma-3-4b';
         this.temperature = 0.3;
         this.isConnected = false;
         this.lastError = null;
-        this.onThinkingUpdate = null; // Callback for thinking updates
+        this.onThinkingUpdate = null;
+        
+        // OpenAI specific settings
+        this.openaiApiKey = '';
+        this.openaiModel = 'gpt-3.5-turbo';
+        this.openaiEndpoint = 'https://api.openai.com/v1';
+    }
+
+    setProvider(provider) {
+        this.provider = provider;
+        this.isConnected = false;
+    }
+
+    setOpenAIApiKey(apiKey) {
+        this.openaiApiKey = apiKey;
+        this.isConnected = false;
+    }
+
+    setOpenAIModel(model) {
+        this.openaiModel = model;
     }
 
     async testConnection() {
         try {
-            const response = await fetch(`${this.endpoint}/v1/models`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            });
-
-            if (response.ok) {
-                this.isConnected = true;
-                this.lastError = null;
-                return { success: true, message: 'Connected to LM Studio' };
+            if (this.provider === 'openai') {
+                return await this.testOpenAIConnection();
             } else {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                return await this.testLMStudioConnection();
             }
         } catch (error) {
             this.isConnected = false;
@@ -31,21 +42,104 @@ class LLMClient {
         }
     }
 
+    async testLMStudioConnection() {
+        const response = await fetch(`${this.endpoint}/v1/models`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        if (response.ok) {
+            this.isConnected = true;
+            this.lastError = null;
+            return { success: true, message: 'Connected to LM Studio' };
+        } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+    }
+
+    async testOpenAIConnection() {
+        if (!this.openaiApiKey) {
+            throw new Error('OpenAI API key is required');
+        }
+
+        const response = await fetch(`${this.openaiEndpoint}/models`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json',
+            }
+        });
+
+        if (response.ok) {
+            this.isConnected = true;
+            this.lastError = null;
+            return { success: true, message: 'Connected to OpenAI' };
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+    }
+
     async getChessMove(gameState, moveHistory, previousAttempt = null) {
         try {
             const systemPrompt = this.buildSystemPrompt();
             const userPrompt = this.buildUserPrompt(gameState, moveHistory, previousAttempt);
 
-            // Use streaming for real-time thinking display
-            if (this.onThinkingUpdate) {
-                return await this.getChessMoveWithStreaming(systemPrompt, userPrompt);
+            if (this.provider === 'openai') {
+                return await this.getChessMoveOpenAI(systemPrompt, userPrompt);
             } else {
-                return await this.getChessMoveNormal(systemPrompt, userPrompt);
+                // Use streaming for LM Studio if thinking callback is available
+                if (this.onThinkingUpdate) {
+                    return await this.getChessMoveWithStreaming(systemPrompt, userPrompt);
+                } else {
+                    return await this.getChessMoveNormal(systemPrompt, userPrompt);
+                }
             }
         } catch (error) {
             console.error('Error getting chess move from LLM:', error);
             throw error;
         }
+    }
+
+    async getChessMoveOpenAI(systemPrompt, userPrompt) {
+        if (!this.openaiApiKey) {
+            throw new Error('OpenAI API key is required');
+        }
+
+        const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.openaiModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: this.temperature,
+                max_tokens: 300,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        const moveText = data.choices[0].message.content.trim();
+        
+        // For OpenAI, simulate thinking display if callback is available
+        if (this.onThinkingUpdate) {
+            this.parseAndUpdateThinking(moveText);
+        }
+        
+        return this.parseChessMove(moveText);
     }
 
     async getChessMoveWithStreaming(systemPrompt, userPrompt) {
@@ -411,61 +505,73 @@ It's your turn to move as BLACK. Choose a legal move from the current position.`
         const lines = moveText.split('\n').map(line => line.trim()).filter(line => line);
         let move = null;
 
-        // First, try to find a move in the last few lines (most likely to be the final decision)
-        for (let i = Math.max(0, lines.length - 3); i < lines.length; i++) {
-            const line = lines[i];
-            
-            // Skip lines with too much text (likely analysis)
-            if (line.length > 10) continue;
-            
-            // Look for simple move patterns
-            const movePatterns = [
-                /^([KQRBN][a-h][1-8])$/,           // Piece moves: Nf6, Bb4
-                /^([a-h][1-8])$/,                  // Pawn moves: e5, d6
-                /^([KQRBN]x[a-h][1-8])$/,         // Piece captures: Nxe4
-                /^([a-h]x[a-h][1-8])$/,           // Pawn captures: exd4
-                /^(O-O-O|O-O)$/                    // Castling
-            ];
-
-            for (const pattern of movePatterns) {
-                const match = line.match(pattern);
-                if (match) {
-                    const candidate = match[1];
-                    if (this.isValidBlackMoveFormat(candidate)) {
-                        move = candidate;
-                        console.log('Found move in line:', line, '-> Move:', move);
-                        break;
-                    }
+        // Strategy 1: Look for explicit "Selected move:" lines first
+        for (const line of lines) {
+            const selectedMatch = line.match(/selected move:\s*([a-h][1-8]|[KQRBN][a-h][1-8]|[KQRBN]?x?[a-h][1-8]|O-O(?:-O)?)/i);
+            if (selectedMatch) {
+                const candidate = selectedMatch[1];
+                if (this.isValidBlackMoveFormat(candidate)) {
+                    move = candidate;
+                    console.log('Found move in "Selected move:" line:', candidate);
+                    break;
                 }
             }
-            if (move) break;
         }
 
-        // If no move found in final lines, search the entire text
+        // Strategy 2: Look for "Final Move" sections
         if (!move) {
-            // Look for moves mentioned in analysis that could be the final choice
-            const allText = moveText.toLowerCase();
-            
-            // Common Black opening moves to look for
-            const commonMoves = ['nf6', 'nc6', 'e6', 'e5', 'd6', 'd5', 'c6', 'c5', 'g6', 'f5'];
-            
-            for (const commonMove of commonMoves) {
-                // Look for patterns like "I choose Nf6" or "Nf6 is best" or just "Nf6" at end
-                const patterns = [
-                    new RegExp(`\\b(${commonMove})\\s*$`, 'i'),                    // Move at end
-                    new RegExp(`\\bchoose\\s+(${commonMove})\\b`, 'i'),            // "choose Nf6"
-                    new RegExp(`\\bplay\\s+(${commonMove})\\b`, 'i'),              // "play Nf6"
-                    new RegExp(`\\b(${commonMove})\\s+is\\s+best\\b`, 'i'),        // "Nf6 is best"
-                    new RegExp(`\\bi\\s+will\\s+play\\s+(${commonMove})\\b`, 'i')  // "I will play Nf6"
-                ];
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.toLowerCase().includes('final move') && i + 1 < lines.length) {
+                    const nextLine = lines[i + 1];
+                    const movePatterns = [
+                        /^([KQRBN][a-h][1-8])$/,           // Piece moves: Nf6, Bb4
+                        /^([a-h][1-8])$/,                  // Pawn moves: e5, d6
+                        /^([KQRBN]x[a-h][1-8])$/,         // Piece captures: Nxe4
+                        /^([a-h]x[a-h][1-8])$/,           // Pawn captures: exd4
+                        /^(O-O-O|O-O)$/                    // Castling
+                    ];
+
+                    for (const pattern of movePatterns) {
+                        const match = nextLine.match(pattern);
+                        if (match) {
+                            const candidate = match[1];
+                            if (this.isValidBlackMoveFormat(candidate)) {
+                                move = candidate;
+                                console.log('Found move after "Final Move":', candidate);
+                                break;
+                            }
+                        }
+                    }
+                    if (move) break;
+                }
+            }
+        }
+
+        // Strategy 3: Look in the last few lines for simple moves
+        if (!move) {
+            for (let i = Math.max(0, lines.length - 5); i < lines.length; i++) {
+                const line = lines[i];
                 
-                for (const pattern of patterns) {
-                    const match = allText.match(pattern);
+                // Skip lines that are too long (likely analysis)
+                if (line.length > 15) continue;
+                
+                // Look for simple move patterns
+                const movePatterns = [
+                    /^([KQRBN][a-h][1-8])$/,           // Piece moves: Nf6, Bb4
+                    /^([a-h][1-8])$/,                  // Pawn moves: e5, d6
+                    /^([KQRBN]x[a-h][1-8])$/,         // Piece captures: Nxe4
+                    /^([a-h]x[a-h][1-8])$/,           // Pawn captures: exd4
+                    /^(O-O-O|O-O)$/                    // Castling
+                ];
+
+                for (const pattern of movePatterns) {
+                    const match = line.match(pattern);
                     if (match) {
-                        const candidate = match[1].charAt(0).toUpperCase() + match[1].slice(1); // Capitalize
+                        const candidate = match[1];
                         if (this.isValidBlackMoveFormat(candidate)) {
                             move = candidate;
-                            console.log('Found move in analysis:', candidate);
+                            console.log('Found move in final lines:', line, '-> Move:', move);
                             break;
                         }
                     }
@@ -474,24 +580,72 @@ It's your turn to move as BLACK. Choose a legal move from the current position.`
             }
         }
 
-        // Last resort: look for any chess notation in the text
+        // Strategy 4: Look for moves in context phrases
         if (!move) {
-            const allMatches = moveText.match(/\b([KQRBN]?[a-h][1-8]|O-O(?:-O)?)\b/g);
-            if (allMatches) {
-                // Take the last valid move
-                for (let i = allMatches.length - 1; i >= 0; i--) {
-                    if (this.isValidBlackMoveFormat(allMatches[i])) {
-                        move = allMatches[i];
-                        console.log('Found move as last resort:', move);
+            const contextPatterns = [
+                /\byour move:\s*([a-h][1-8]|[KQRBN][a-h][1-8])/i,
+                /\bi (?:will )?play\s+([a-h][1-8]|[KQRBN][a-h][1-8])/i,
+                /\bchoose\s+([a-h][1-8]|[KQRBN][a-h][1-8])/i,
+                /\bmove[:\s]+([a-h][1-8]|[KQRBN][a-h][1-8])/i
+            ];
+
+            for (const line of lines) {
+                for (const pattern of contextPatterns) {
+                    const match = line.match(pattern);
+                    if (match) {
+                        const candidate = match[1];
+                        if (this.isValidBlackMoveFormat(candidate)) {
+                            move = candidate;
+                            console.log('Found move in context:', candidate);
+                            break;
+                        }
+                    }
+                }
+                if (move) break;
+            }
+        }
+
+        // Strategy 5: Extract the most likely move from complex notation
+        if (!move) {
+            const allText = moveText.toLowerCase();
+            
+            // Look for specific move patterns in analysis
+            const analysisPatterns = [
+                /\b([a-h][1-8])\b(?:\s+(?:is|would be|seems|looks))/,  // "e5 is a good move"
+                /\bplay\s+([a-h][1-8]|[kqrbn][a-h][1-8])\b/,          // "play e5"
+                /\bmove\s+([a-h][1-8]|[kqrbn][a-h][1-8])\b/,          // "move e5"
+                /\b([kqrbn][a-h][1-8])\b(?:\s+(?:is|would be|seems|looks))/  // "Nf6 is good"
+            ];
+
+            for (const pattern of analysisPatterns) {
+                const match = allText.match(pattern);
+                if (match) {
+                    const candidate = match[1].charAt(0).toUpperCase() + match[1].slice(1); // Capitalize
+                    if (this.isValidBlackMoveFormat(candidate)) {
+                        move = candidate;
+                        console.log('Found move in analysis pattern:', candidate);
                         break;
                     }
                 }
             }
         }
 
+        // Strategy 6: Last resort - find any chess notation
+        if (!move) {
+            const allMatches = moveText.match(/\b([KQRBN]?[a-h][1-8]|O-O(?:-O)?)\b/g);
+            if (allMatches) {
+                // Filter for valid black moves and take the last one
+                const validMoves = allMatches.filter(m => this.isValidBlackMoveFormat(m));
+                if (validMoves.length > 0) {
+                    move = validMoves[validMoves.length - 1];
+                    console.log('Found move as last resort:', move);
+                }
+            }
+        }
+
         if (!move) {
             console.error('Could not parse move from:', moveText);
-            throw new Error(`Could not parse chess move from LLM response. The LLM must end its response with a valid move notation.`);
+            throw new Error(`Could not parse chess move from LLM response. The LLM should clearly state the move at the end of its response.`);
         }
 
         return move.trim();
@@ -500,18 +654,24 @@ It's your turn to move as BLACK. Choose a legal move from the current position.`
     isValidBlackMoveFormat(moveText) {
         const cleaned = moveText.trim();
         
-        // Skip obvious White opening moves
-        if (['e4', 'd4', 'Nf3', 'Bc4', 'Bb5'].includes(cleaned)) {
+        // Skip obvious invalid patterns
+        if (cleaned.length === 0 || cleaned.length > 6) {
             return false;
         }
         
-        // Check valid formats
+        // Skip obvious White opening moves that Black can't make
+        const whiteOnlyMoves = ['e4', 'd4', 'Nf3', 'Bc4', 'Bb5', 'Be2', 'Bg5'];
+        if (whiteOnlyMoves.includes(cleaned)) {
+            return false;
+        }
+        
+        // Check valid chess notation patterns
         const validPatterns = [
-            /^[a-h][1-8]$/,                    // Simple pawn move
-            /^[a-h]x[a-h][1-8]$/,             // Pawn capture
-            /^[KQRBN][a-h][1-8]$/,            // Piece move
-            /^[KQRBN][a-h]?[1-8]?x[a-h][1-8]$/, // Piece capture
-            /^O-O(-O)?$/                       // Castling
+            /^[a-h][1-8]$/,                        // Simple pawn move: e5, d6
+            /^[a-h]x[a-h][1-8]$/,                 // Pawn capture: exd5
+            /^[KQRBN][a-h][1-8]$/,                // Piece move: Nf6, Bb4
+            /^[KQRBN][a-h]?[1-8]?x[a-h][1-8]$/,   // Piece capture: Nxe4, Bxf7
+            /^O-O(-O)?$/                           // Castling
         ];
         
         return validPatterns.some(pattern => pattern.test(cleaned));
@@ -525,29 +685,61 @@ Format: "Move: [move] - [brief explanation]"`;
 
             const userPrompt = this.buildUserPrompt(gameState, moveHistory);
 
-            const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: this.model,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt }
-                    ],
-                    temperature: 0.5,
-                    max_tokens: 100,
-                    stream: false
-                })
-            });
+            if (this.provider === 'openai') {
+                if (!this.openaiApiKey) {
+                    throw new Error('OpenAI API key is required');
+                }
 
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.openaiApiKey}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: this.openaiModel,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: userPrompt }
+                        ],
+                        temperature: 0.5,
+                        max_tokens: 100,
+                        stream: false
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
+                }
+
+                const data = await response.json();
+                return data.choices[0].message.content.trim();
+            } else {
+                const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: this.model,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: userPrompt }
+                        ],
+                        temperature: 0.5,
+                        max_tokens: 100,
+                        stream: false
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                return data.choices[0].message.content.trim();
             }
-
-            const data = await response.json();
-            return data.choices[0].message.content.trim();
         } catch (error) {
             console.error('Error getting hint from LLM:', error);
             throw error;
@@ -570,15 +762,164 @@ Format: "Move: [move] - [brief explanation]"`;
     getStatus() {
         return {
             connected: this.isConnected,
-            endpoint: this.endpoint,
-            model: this.model,
+            provider: this.provider,
+            endpoint: this.provider === 'openai' ? this.openaiEndpoint : this.endpoint,
+            model: this.provider === 'openai' ? this.openaiModel : this.model,
             temperature: this.temperature,
-            lastError: this.lastError
+            lastError: this.lastError,
+            hasApiKey: this.provider === 'openai' ? !!this.openaiApiKey : true
         };
     }
 
     setThinkingCallback(callback) {
         this.onThinkingUpdate = callback;
+    }
+
+    async analyzeCheckPosition(gameState, moveHistory, playerInCheck) {
+        try {
+            const systemPrompt = `You are a chess grandmaster analyzing a position where ${playerInCheck} is in check.
+
+Your task is to determine if this is CHECKMATE or just CHECK.
+
+CHECKMATE occurs when:
+1. The king is in check
+2. There are NO legal moves that can get the king out of check
+
+Analyze the position carefully and respond with either:
+- "CHECKMATE" if there are no legal moves to escape check
+- "CHECK" if there are legal moves available to escape check
+
+Be thorough in your analysis. Consider all possible moves:
+- Moving the king to a safe square
+- Blocking the check with another piece  
+- Capturing the attacking piece
+
+End your response with just the word CHECKMATE or CHECK on its own line.`;
+
+            const userPrompt = this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck);
+
+            let response;
+            if (this.provider === 'openai') {
+                response = await this.getOpenAIResponse(systemPrompt, userPrompt);
+            } else {
+                response = await this.getLMStudioResponse(systemPrompt, userPrompt);
+            }
+
+            // Parse the response
+            const lines = response.split('\n').map(line => line.trim()).filter(line => line);
+            const lastLine = lines[lines.length - 1].toUpperCase();
+            
+            if (lastLine === 'CHECKMATE') {
+                return 'checkmate';
+            } else if (lastLine === 'CHECK') {
+                return 'check';
+            } else {
+                // Fallback: if response is unclear, assume it's just check
+                console.warn('LLM analysis unclear, defaulting to check:', response);
+                return 'check';
+            }
+
+        } catch (error) {
+            console.error('Error analyzing check position:', error);
+            // Fallback: assume it's just check if analysis fails
+            return 'check';
+        }
+    }
+
+    buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck) {
+        const fen = gameState.getBoardAsFEN();
+        const opponentColor = playerInCheck === 'white' ? 'black' : 'white';
+        
+        // Get all legal moves for the player in check
+        const legalMoves = this.getLegalMovesForColor(gameState, playerInCheck);
+        
+        let moveHistoryText = '';
+        if (moveHistory.length > 0) {
+            const recentMoves = moveHistory.slice(-6);
+            moveHistoryText = recentMoves.map((move, index) => {
+                const fullMoveIndex = moveHistory.length - recentMoves.length + index;
+                const moveNumber = Math.floor(fullMoveIndex / 2) + 1;
+                const isWhiteMove = fullMoveIndex % 2 === 0;
+                
+                if (isWhiteMove) {
+                    return `${moveNumber}. ${move.notation}`;
+                } else {
+                    return `${move.notation}`;
+                }
+            }).join(' ');
+        }
+
+        return `POSITION TO ANALYZE (FEN): ${fen}
+
+RECENT MOVES: ${moveHistoryText || 'Game start'}
+
+SITUATION: ${playerInCheck.toUpperCase()} is in CHECK from ${opponentColor} pieces.
+
+LEGAL MOVES AVAILABLE TO ${playerInCheck.toUpperCase()}: ${legalMoves.length > 0 ? legalMoves.join(', ') : 'NONE'}
+
+Your task: Determine if this is CHECKMATE (no legal moves to escape check) or just CHECK (legal moves exist).
+
+Analyze each available move to see if it allows ${playerInCheck} to escape check.
+
+Important: A move is only legal if it gets the king out of check. Some moves might be technically possible but leave the king in check - these don't count.`;
+    }
+
+    async getOpenAIResponse(systemPrompt, userPrompt) {
+        if (!this.openaiApiKey) {
+            throw new Error('OpenAI API key is required');
+        }
+
+        const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.openaiModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.1, // Low temperature for accurate analysis
+                max_tokens: 500,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    }
+
+    async getLMStudioResponse(systemPrompt, userPrompt) {
+        const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.1, // Low temperature for accurate analysis
+                max_tokens: 500,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
     }
 }
 

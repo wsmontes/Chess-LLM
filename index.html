@@ -20,7 +20,7 @@
                     </div>
                     <div class="player ai-player">
                         <i class="fas fa-robot"></i>
-                        <span>LLM (Black)</span>
+                        <span id="ai-player-label">LLM (Black)</span>
                     </div>
                 </div>
                 <div class="game-status">
@@ -101,19 +101,53 @@
 
                 <div class="llm-settings">
                     <h3><i class="fas fa-cogs"></i> LLM Settings</h3>
+                    
                     <div class="setting-group">
-                        <label for="llm-model">Model:</label>
-                        <input type="text" id="llm-model" value="google/gemma-3-4b" placeholder="Model name">
+                        <label for="llm-provider">Provider:</label>
+                        <select id="llm-provider">
+                            <option value="lmstudio">LM Studio (Local)</option>
+                            <option value="openai">OpenAI GPT-3.5 Turbo</option>
+                        </select>
                     </div>
+
+                    <div id="lmstudio-settings">
+                        <div class="setting-group">
+                            <label for="llm-model">Model:</label>
+                            <input type="text" id="llm-model" value="google/gemma-3-4b" placeholder="Model name">
+                        </div>
+                        <div class="setting-group">
+                            <label for="llm-endpoint">Endpoint:</label>
+                            <input type="text" id="llm-endpoint" value="http://localhost:1234" placeholder="LM Studio endpoint">
+                        </div>
+                    </div>
+
+                    <div id="openai-settings" style="display: none;">
+                        <div class="setting-group">
+                            <label for="openai-api-key">API Key:</label>
+                            <input type="password" id="openai-api-key" placeholder="sk-..." autocomplete="off">
+                            <small class="setting-help">Your OpenAI API key (stored securely in browser)</small>
+                            <div class="security-notice">
+                                <i class="fas fa-shield-alt"></i>
+                                Your API key is encrypted and stored locally in your browser. It never leaves your device except when making API calls to OpenAI.
+                            </div>
+                        </div>
+                        <div class="setting-group">
+                            <label for="openai-model">Model:</label>
+                            <select id="openai-model">
+                                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                                <option value="gpt-3.5-turbo-1106">GPT-3.5 Turbo (Nov 2023)</option>
+                                <option value="gpt-4">GPT-4</option>
+                                <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="setting-group">
                         <label for="llm-temperature">Temperature:</label>
                         <input type="range" id="llm-temperature" min="0" max="1" step="0.1" value="0.3">
                         <span id="temperature-value">0.3</span>
                     </div>
-                    <div class="setting-group">
-                        <label for="llm-endpoint">Endpoint:</label>
-                        <input type="text" id="llm-endpoint" value="http://localhost:1234" placeholder="LM Studio endpoint">
-                    </div>
+                    
                     <div class="connection-status" id="connection-status">
                         <i class="fas fa-circle"></i>
                         <span>Not connected</span>
