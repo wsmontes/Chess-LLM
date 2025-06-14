@@ -382,14 +382,13 @@ Remember: You MUST end with a valid move for Black pieces from the CURRENT posit
     buildUserPrompt(gameState, moveHistory, previousAttempt = null) {
         const fen = gameState.getBoardAsFEN();
         
-        // Build detailed move history
+        // Build detailed move history - show more moves for better context
         let moveHistoryText = '';
         if (moveHistory.length > 0) {
-            const recentMoves = moveHistory.slice(-8); // Last 8 moves for better context
-            moveHistoryText = recentMoves.map((move, index) => {
-                const fullMoveIndex = moveHistory.length - recentMoves.length + index;
-                const moveNumber = Math.floor(fullMoveIndex / 2) + 1;
-                const isWhiteMove = fullMoveIndex % 2 === 0;
+            // Show all moves instead of just last 8 for better context
+            moveHistoryText = moveHistory.map((move, index) => {
+                const moveNumber = Math.floor(index / 2) + 1;
+                const isWhiteMove = index % 2 === 0;
                 
                 if (isWhiteMove) {
                     return `${moveNumber}. ${move.notation}`;
@@ -397,6 +396,23 @@ Remember: You MUST end with a valid move for Black pieces from the CURRENT posit
                     return `${move.notation}`;
                 }
             }).join(' ');
+        }
+
+        // Also provide a more readable format
+        let moveSequence = '';
+        if (moveHistory.length > 0) {
+            moveSequence = '\nMOVE SEQUENCE:\n';
+            for (let i = 0; i < moveHistory.length; i += 2) {
+                const moveNumber = Math.floor(i / 2) + 1;
+                const whiteMove = moveHistory[i]?.notation || '';
+                const blackMove = moveHistory[i + 1]?.notation || '';
+                
+                if (blackMove) {
+                    moveSequence += `${moveNumber}. ${whiteMove} ${blackMove}\n`;
+                } else if (whiteMove) {
+                    moveSequence += `${moveNumber}. ${whiteMove}\n`;
+                }
+            }
         }
 
         // Get all legal moves for Black
@@ -451,7 +467,9 @@ Remember: You MUST end with a valid move for Black pieces from the CURRENT posit
 
         let prompt = `CURRENT POSITION (FEN): ${fen}
 
-MOVE HISTORY: ${moveHistoryText || 'Game just started'}
+MOVE HISTORY (PGN format): ${moveHistoryText || 'Game just started'}${moveSequence}
+
+CURRENT MOVE NUMBER: ${Math.ceil((moveHistory.length + 1) / 2)} (${moveHistory.length % 2 === 0 ? 'Black to move' : 'Black responding to White'})
 
 YOUR BLACK PIECES CURRENTLY ON BOARD: ${blackPieceDescription}
 WHITE PIECES CURRENTLY ON BOARD: ${whitePieceDescription}
@@ -765,6 +783,64 @@ Important: The legal moves listed above are already filtered - they all get the 
         
         // Fallback: return the last non-empty line
         return lines[lines.length - 1];
+    }
+
+    async getOpenAIResponse(systemPrompt, userPrompt) {
+        if (!this.openaiApiKey) {
+            throw new Error('OpenAI API key is required');
+        }
+
+        const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.openaiModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.1, // Low temperature for accurate analysis
+                max_tokens: 500,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    }
+
+    async getLMStudioResponse(systemPrompt, userPrompt) {
+        const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.1, // Low temperature for accurate analysis
+                max_tokens: 500,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
     }
 }
 
