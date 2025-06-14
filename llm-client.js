@@ -498,185 +498,6 @@ It's your turn to move as BLACK. Choose a legal move from the current position.`
         return legalMoves.sort(); // Sort for better readability
     }
 
-    parseChessMove(moveText) {
-        console.log('Parsing LLM response:', moveText);
-        
-        // Split into lines and look for move patterns
-        const lines = moveText.split('\n').map(line => line.trim()).filter(line => line);
-        let move = null;
-
-        // Strategy 1: Look for explicit "Selected move:" lines first
-        for (const line of lines) {
-            const selectedMatch = line.match(/selected move:\s*([a-h][1-8]|[KQRBN][a-h][1-8]|[KQRBN]?x?[a-h][1-8]|O-O(?:-O)?)/i);
-            if (selectedMatch) {
-                const candidate = selectedMatch[1];
-                if (this.isValidBlackMoveFormat(candidate)) {
-                    move = candidate;
-                    console.log('Found move in "Selected move:" line:', candidate);
-                    break;
-                }
-            }
-        }
-
-        // Strategy 2: Look for "Final Move" sections
-        if (!move) {
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (line.toLowerCase().includes('final move') && i + 1 < lines.length) {
-                    const nextLine = lines[i + 1];
-                    const movePatterns = [
-                        /^([KQRBN][a-h][1-8])$/,           // Piece moves: Nf6, Bb4
-                        /^([a-h][1-8])$/,                  // Pawn moves: e5, d6
-                        /^([KQRBN]x[a-h][1-8])$/,         // Piece captures: Nxe4
-                        /^([a-h]x[a-h][1-8])$/,           // Pawn captures: exd4
-                        /^(O-O-O|O-O)$/                    // Castling
-                    ];
-
-                    for (const pattern of movePatterns) {
-                        const match = nextLine.match(pattern);
-                        if (match) {
-                            const candidate = match[1];
-                            if (this.isValidBlackMoveFormat(candidate)) {
-                                move = candidate;
-                                console.log('Found move after "Final Move":', candidate);
-                                break;
-                            }
-                        }
-                    }
-                    if (move) break;
-                }
-            }
-        }
-
-        // Strategy 3: Look in the last few lines for simple moves
-        if (!move) {
-            for (let i = Math.max(0, lines.length - 5); i < lines.length; i++) {
-                const line = lines[i];
-                
-                // Skip lines that are too long (likely analysis)
-                if (line.length > 15) continue;
-                
-                // Look for simple move patterns
-                const movePatterns = [
-                    /^([KQRBN][a-h][1-8])$/,           // Piece moves: Nf6, Bb4
-                    /^([a-h][1-8])$/,                  // Pawn moves: e5, d6
-                    /^([KQRBN]x[a-h][1-8])$/,         // Piece captures: Nxe4
-                    /^([a-h]x[a-h][1-8])$/,           // Pawn captures: exd4
-                    /^(O-O-O|O-O)$/                    // Castling
-                ];
-
-                for (const pattern of movePatterns) {
-                    const match = line.match(pattern);
-                    if (match) {
-                        const candidate = match[1];
-                        if (this.isValidBlackMoveFormat(candidate)) {
-                            move = candidate;
-                            console.log('Found move in final lines:', line, '-> Move:', move);
-                            break;
-                        }
-                    }
-                }
-                if (move) break;
-            }
-        }
-
-        // Strategy 4: Look for moves in context phrases
-        if (!move) {
-            const contextPatterns = [
-                /\byour move:\s*([a-h][1-8]|[KQRBN][a-h][1-8])/i,
-                /\bi (?:will )?play\s+([a-h][1-8]|[KQRBN][a-h][1-8])/i,
-                /\bchoose\s+([a-h][1-8]|[KQRBN][a-h][1-8])/i,
-                /\bmove[:\s]+([a-h][1-8]|[KQRBN][a-h][1-8])/i
-            ];
-
-            for (const line of lines) {
-                for (const pattern of contextPatterns) {
-                    const match = line.match(pattern);
-                    if (match) {
-                        const candidate = match[1];
-                        if (this.isValidBlackMoveFormat(candidate)) {
-                            move = candidate;
-                            console.log('Found move in context:', candidate);
-                            break;
-                        }
-                    }
-                }
-                if (move) break;
-            }
-        }
-
-        // Strategy 5: Extract the most likely move from complex notation
-        if (!move) {
-            const allText = moveText.toLowerCase();
-            
-            // Look for specific move patterns in analysis
-            const analysisPatterns = [
-                /\b([a-h][1-8])\b(?:\s+(?:is|would be|seems|looks))/,  // "e5 is a good move"
-                /\bplay\s+([a-h][1-8]|[kqrbn][a-h][1-8])\b/,          // "play e5"
-                /\bmove\s+([a-h][1-8]|[kqrbn][a-h][1-8])\b/,          // "move e5"
-                /\b([kqrbn][a-h][1-8])\b(?:\s+(?:is|would be|seems|looks))/  // "Nf6 is good"
-            ];
-
-            for (const pattern of analysisPatterns) {
-                const match = allText.match(pattern);
-                if (match) {
-                    const candidate = match[1].charAt(0).toUpperCase() + match[1].slice(1); // Capitalize
-                    if (this.isValidBlackMoveFormat(candidate)) {
-                        move = candidate;
-                        console.log('Found move in analysis pattern:', candidate);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Strategy 6: Last resort - find any chess notation
-        if (!move) {
-            const allMatches = moveText.match(/\b([KQRBN]?[a-h][1-8]|O-O(?:-O)?)\b/g);
-            if (allMatches) {
-                // Filter for valid black moves and take the last one
-                const validMoves = allMatches.filter(m => this.isValidBlackMoveFormat(m));
-                if (validMoves.length > 0) {
-                    move = validMoves[validMoves.length - 1];
-                    console.log('Found move as last resort:', move);
-                }
-            }
-        }
-
-        if (!move) {
-            console.error('Could not parse move from:', moveText);
-            throw new Error(`Could not parse chess move from LLM response. The LLM should clearly state the move at the end of its response.`);
-        }
-
-        return move.trim();
-    }
-
-    isValidBlackMoveFormat(moveText) {
-        const cleaned = moveText.trim();
-        
-        // Skip obvious invalid patterns
-        if (cleaned.length === 0 || cleaned.length > 6) {
-            return false;
-        }
-        
-        // Skip obvious White opening moves that Black can't make
-        const whiteOnlyMoves = ['e4', 'd4', 'Nf3', 'Bc4', 'Bb5', 'Be2', 'Bg5'];
-        if (whiteOnlyMoves.includes(cleaned)) {
-            return false;
-        }
-        
-        // Check valid chess notation patterns
-        const validPatterns = [
-            /^[a-h][1-8]$/,                        // Simple pawn move: e5, d6
-            /^[a-h]x[a-h][1-8]$/,                 // Pawn capture: exd5
-            /^[KQRBN][a-h][1-8]$/,                // Piece move: Nf6, Bb4
-            /^[KQRBN][a-h]?[1-8]?x[a-h][1-8]$/,   // Piece capture: Nxe4, Bxf7
-            /^O-O(-O)?$/                           // Castling
-        ];
-        
-        return validPatterns.some(pattern => pattern.test(cleaned));
-    }
-
     async getHint(gameState, moveHistory, playerColor) {
         try {
             const systemPrompt = `You are a chess coach providing helpful hints to a ${playerColor} player. 
@@ -781,18 +602,27 @@ Format: "Move: [move] - [brief explanation]"`;
 
 Your task is to determine if this is CHECKMATE or just CHECK.
 
-CHECKMATE occurs when:
+CHECKMATE occurs when ALL THREE conditions are met:
 1. The king is in check
-2. There are NO legal moves that can get the king out of check
+2. The king CANNOT move to any safe square
+3. NO piece can block the check OR capture the attacking piece
 
-Analyze the position carefully and respond with either:
-- "CHECKMATE" if there are no legal moves to escape check
-- "CHECK" if there are legal moves available to escape check
+CHECK occurs when:
+1. The king is in check 
+2. BUT there is at least ONE legal move that gets the king out of check
 
-Be thorough in your analysis. Consider all possible moves:
-- Moving the king to a safe square
-- Blocking the check with another piece  
-- Capturing the attacking piece
+To escape check, you can:
+1. MOVE THE KING to a safe square (not attacked by opponent pieces)
+2. BLOCK the check by moving a piece between the king and attacker
+3. CAPTURE the piece that is giving check
+
+CRITICAL: Even if the king cannot move, it's NOT checkmate if ANY other piece can block or capture to save the king.
+
+You must check EVERY possible move for the player in check. If even ONE move exists that gets out of check, it's CHECK, not CHECKMATE.
+
+Analyze thoroughly and respond with either:
+- "CHECKMATE" only if there are absolutely zero legal moves
+- "CHECK" if there are any legal moves available
 
 End your response with just the word CHECKMATE or CHECK on its own line.`;
 
@@ -809,7 +639,18 @@ End your response with just the word CHECKMATE or CHECK on its own line.`;
             const lines = response.split('\n').map(line => line.trim()).filter(line => line);
             const lastLine = lines[lines.length - 1].toUpperCase();
             
+            console.log('LLM checkmate analysis response:', response);
+            console.log('Final decision:', lastLine);
+            
             if (lastLine === 'CHECKMATE') {
+                // Double-check with engine logic as a safety net
+                const engineCheckmate = gameState.isActualCheckmate(playerInCheck);
+                console.log('Engine checkmate verification:', engineCheckmate);
+                
+                if (!engineCheckmate) {
+                    console.warn('LLM said checkmate but engine says no - defaulting to check');
+                    return 'check';
+                }
                 return 'checkmate';
             } else if (lastLine === 'CHECK') {
                 return 'check';
@@ -833,6 +674,10 @@ End your response with just the word CHECKMATE or CHECK on its own line.`;
         // Get all legal moves for the player in check
         const legalMoves = this.getLegalMovesForColor(gameState, playerInCheck);
         
+        // Get king position and what's attacking it
+        const kingSquare = gameState.findKing(playerInCheck);
+        const attackingPieces = this.findAttackingPieces(gameState, kingSquare, opponentColor);
+        
         let moveHistoryText = '';
         if (moveHistory.length > 0) {
             const recentMoves = moveHistory.slice(-6);
@@ -853,73 +698,73 @@ End your response with just the word CHECKMATE or CHECK on its own line.`;
 
 RECENT MOVES: ${moveHistoryText || 'Game start'}
 
-SITUATION: ${playerInCheck.toUpperCase()} is in CHECK from ${opponentColor} pieces.
+CURRENT SITUATION:
+- ${playerInCheck.toUpperCase()} KING on ${kingSquare} is in CHECK
+- Attacking pieces: ${attackingPieces.join(', ')}
+- ${playerInCheck.toUpperCase()} has ${legalMoves.length} legal moves available
 
-LEGAL MOVES AVAILABLE TO ${playerInCheck.toUpperCase()}: ${legalMoves.length > 0 ? legalMoves.join(', ') : 'NONE'}
+ALL LEGAL MOVES FOR ${playerInCheck.toUpperCase()}: ${legalMoves.length > 0 ? legalMoves.join(', ') : 'NONE'}
 
-Your task: Determine if this is CHECKMATE (no legal moves to escape check) or just CHECK (legal moves exist).
+ANALYSIS REQUIRED:
+1. Can the KING move to any safe square? Check each king move carefully.
+2. Can ANY piece CAPTURE the attacking piece(s)?
+3. Can ANY piece BLOCK the check by moving between king and attacker?
 
-Analyze each available move to see if it allows ${playerInCheck} to escape check.
+REMEMBER: If even ONE legal move exists that gets out of check, it's CHECK, not CHECKMATE.
 
-Important: A move is only legal if it gets the king out of check. Some moves might be technically possible but leave the king in check - these don't count.`;
+Important: The legal moves listed above are already filtered - they all get the king out of check. If any moves are listed, it's CHECK, not CHECKMATE.`;
     }
 
-    async getOpenAIResponse(systemPrompt, userPrompt) {
-        if (!this.openaiApiKey) {
-            throw new Error('OpenAI API key is required');
+    findAttackingPieces(gameState, kingSquare, attackingColor) {
+        const attackers = [];
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = gameState.board[rank][file];
+                if (piece && piece.color === attackingColor) {
+                    const square = gameState.squareToString(file, rank);
+                    const moves = gameState.generatePieceMoves(square, piece, false);
+                    if (moves.includes(kingSquare)) {
+                        const pieceType = piece.type === 'knight' ? 'N' : 
+                                        piece.type === 'bishop' ? 'B' :
+                                        piece.type === 'rook' ? 'R' :
+                                        piece.type === 'queen' ? 'Q' :
+                                        piece.type === 'king' ? 'K' : 'P';
+                        attackers.push(`${pieceType}${square}`);
+                    }
+                }
+            }
         }
-
-        const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.openaiApiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: this.openaiModel,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: 0.1, // Low temperature for accurate analysis
-                max_tokens: 500,
-                stream: false
-            })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
-        }
-
-        const data = await response.json();
-        return data.choices[0].message.content.trim();
+        
+        return attackers;
     }
 
-    async getLMStudioResponse(systemPrompt, userPrompt) {
-        const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: 0.1, // Low temperature for accurate analysis
-                max_tokens: 500,
-                stream: false
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    // Add parseChessMove as an instance method, not just as a function
+    parseChessMove(moveText) {
+        // Normalize line endings and trim whitespace
+        const text = moveText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+        
+        // Split by lines and filter out empty lines
+        const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+        
+        // If the last line is a move, return it directly
+        const lastLine = lines[lines.length - 1];
+        if (/^[a-h][1-8]$|^[KQRBN][a-h][1-8]$|^O-O/.test(lastLine)) {
+            return lastLine;
         }
-
-        const data = await response.json();
-        return data.choices[0].message.content.trim();
+        
+        // Heuristic: if it looks like a move (contains letters and numbers, maybe + or #), return the last such segment
+        const movePattern = /[a-h][1-8][+#]?$/i;
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+            const match = line.match(movePattern);
+            if (match) {
+                return match[0];
+            }
+        }
+        
+        // Fallback: return the last non-empty line
+        return lines[lines.length - 1];
     }
 }
 

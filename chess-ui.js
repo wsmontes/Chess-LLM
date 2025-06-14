@@ -314,20 +314,36 @@ class ChessUI {
             // Show analysis indicator
             this.updateStatus(`Analyzing position... ${playerInCheck} is in check`);
             
-            try {
-                const analysis = await this.llm.analyzeCheckPosition(
-                    this.engine, 
-                    this.engine.moveHistory, 
-                    playerInCheck
-                );
-                
-                if (analysis === 'checkmate') {
-                    this.engine.setCheckmate();
+            // First, do a quick engine check to see if it's obviously not checkmate
+            const hasLegalMoves = this.engine.hasValidMovesForPlayer(playerInCheck);
+            console.log(`Player ${playerInCheck} in check - has legal moves: ${hasLegalMoves}`);
+            
+            if (hasLegalMoves) {
+                console.log('Engine confirms legal moves exist - definitely not checkmate');
+                // Don't even ask LLM if engine confirms there are legal moves
+                this.engine.gameState = 'check';
+            } else {
+                console.log('Engine says no legal moves - asking LLM for confirmation');
+                try {
+                    const analysis = await this.llm.analyzeCheckPosition(
+                        this.engine, 
+                        this.engine.moveHistory, 
+                        playerInCheck
+                    );
+                    
+                    console.log('LLM analysis result:', analysis);
+                    
+                    if (analysis === 'checkmate') {
+                        this.engine.setCheckmate();
+                        console.log('Game ended - checkmate confirmed');
+                    } else {
+                        console.log('LLM says check only - continuing game');
+                    }
+                    
+                } catch (error) {
+                    console.warn('Failed to analyze check position:', error);
+                    // Continue with just 'check' status if analysis fails
                 }
-                
-            } catch (error) {
-                console.warn('Failed to analyze check position:', error);
-                // Continue with just 'check' status
             }
         }
         
@@ -369,7 +385,22 @@ class ChessUI {
             }
 
             // Get move from LLM
-            const moveNotation = await this.llm.getChessMove(this.engine, this.engine.moveHistory, previousAttempt);
+            let moveNotation;
+            try {
+                moveNotation = await this.llm.getChessMove(this.engine, this.engine.moveHistory, previousAttempt);
+            } catch (parseError) {
+                // Check if this is a confirmation request
+                if (parseError.message.includes('requesting confirmation') || 
+                    parseError.message.includes('confirmation failed')) {
+                    this.addConfirmationRequestToThinking();
+                    this.updateStatus('Requesting move clarification from LLM...');
+                    
+                    // The LLM client will handle the confirmation internally
+                    throw parseError;
+                } else {
+                    throw parseError;
+                }
+            }
             
             // Validate the move before executing
             const validationResult = this.validateLLMMove(moveNotation);
@@ -419,6 +450,21 @@ class ChessUI {
             this.showThinkingStreamIndicator(false);
             this.updateStatus();
         }
+    }
+
+    addConfirmationRequestToThinking() {
+        if (!this.isThinkingVisible) return;
+        
+        const confirmationStep = {
+            type: 'confirmation-request',
+            content: `🔄 Move unclear - requesting clarification from LLM`
+        };
+        
+        const stepElement = this.createThinkingStep(confirmationStep, 0);
+        stepElement.style.borderLeftColor = '#2196F3';
+        stepElement.style.background = 'rgba(33, 150, 243, 0.05)';
+        this.thinkingContent.appendChild(stepElement);
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
     }
 
     validateLLMMove(moveNotation) {
@@ -561,7 +607,8 @@ class ChessUI {
             'decision': 'Decision Making',
             'final': 'Final Move',
             'validation-error': 'Move Validation Error',
-            'retry-success': 'Retry Success'
+            'retry-success': 'Retry Success',
+            'confirmation-request': 'Move Clarification'
         };
 
         stepElement.innerHTML = `
