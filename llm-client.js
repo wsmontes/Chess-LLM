@@ -478,15 +478,32 @@ LEGAL MOVES AVAILABLE TO YOU RIGHT NOW: ${legalMoves.join(', ')}
 
 IMPORTANT: Analyze the FEN notation above to see the EXACT current position. Do not assume where pieces should be - look at where they actually are.`;
 
-        // Add feedback from previous invalid attempt
+        // Enhanced feedback from previous invalid attempt
         if (previousAttempt) {
             prompt += `
 
-⚠️ PREVIOUS ATTEMPT CORRECTION:
-Your last move "${previousAttempt.move}" was INVALID.
-Reason: ${previousAttempt.reason}
+⚠️ MOVE CORRECTION REQUIRED - ATTEMPT ${previousAttempt.attemptNumber || 1}
 
-Please analyze why this move was invalid and choose a different legal move from the list above.`;
+INVALID MOVE: "${previousAttempt.move}"
+
+DETAILED ANALYSIS OF WHY THIS MOVE FAILED:
+${previousAttempt.reason}
+
+POSITION CONTEXT:
+- Current FEN: ${previousAttempt.currentPosition || fen}
+- Available legal moves: ${(previousAttempt.availableMoves || legalMoves).slice(0, 10).join(', ')}${(previousAttempt.availableMoves || legalMoves).length > 10 ? '...' : ''}
+
+PIECE POSITIONS:
+${previousAttempt.piecePositions ? Object.entries(previousAttempt.piecePositions).map(([type, positions]) => `- ${type}: ${positions.join(', ')}`).join('\n') : 'See above'}
+
+CRITICAL INSTRUCTIONS FOR RETRY:
+1. READ the detailed error analysis above carefully
+2. CHOOSE from the available legal moves list ONLY
+3. DO NOT repeat the same invalid move
+4. CONSIDER the recommended moves from the analysis
+5. VERIFY your chosen move appears in the legal moves list
+
+Please analyze the error, understand why your previous move was invalid, and choose a different LEGAL move from the available options.`;
         }
 
         prompt += `
@@ -759,30 +776,67 @@ Important: The legal moves listed above are already filtered - they all get the 
 
     // Add parseChessMove as an instance method, not just as a function
     parseChessMove(moveText) {
+        console.log('Parsing move text:', moveText);
+        
         // Normalize line endings and trim whitespace
         const text = moveText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
         
         // Split by lines and filter out empty lines
         const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
         
-        // If the last line is a move, return it directly
-        const lastLine = lines[lines.length - 1];
-        if (/^[a-h][1-8]$|^[KQRBN][a-h][1-8]$|^O-O/.test(lastLine)) {
-            return lastLine;
-        }
+        // Look for move patterns in the last few lines
+        const movePatterns = [
+            /^([a-h][1-8])$/,                    // Simple pawn moves: e4, d5
+            /^([KQRBN][a-h][1-8])$/,            // Piece moves: Nf3, Bb5
+            /^([a-h]x[a-h][1-8])$/,             // Pawn captures: exd5
+            /^([KQRBN]x[a-h][1-8])$/,           // Piece captures: Nxe4
+            /^(O-O-O|O-O)$/,                    // Castling
+            /^([a-h][18]=[QRBN])$/,             // Promotion: e8=Q
+            /^([KQRBN][a-h]\d?[a-h][1-8])$/,    // Disambiguated moves: Nbd2
+            /\b([a-h][1-8])\b/,                 // Any square notation
+            /\b([KQRBN][a-h][1-8])\b/,          // Any piece move
+            /\b(O-O-O|O-O)\b/                   // Castling anywhere in text
+        ];
         
-        // Heuristic: if it looks like a move (contains letters and numbers, maybe + or #), return the last such segment
-        const movePattern = /[a-h][1-8][+#]?$/i;
-        for (let i = lines.length - 1; i >= 0; i--) {
+        // Check lines from end to beginning for move patterns
+        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
             const line = lines[i];
-            const match = line.match(movePattern);
-            if (match) {
-                return match[0];
+            
+            for (const pattern of movePatterns) {
+                const match = line.match(pattern);
+                if (match) {
+                    let move = match[1] || match[0];
+                    
+                    // Clean up move notation
+                    move = move.replace(/[+#!?]$/, ''); // Remove check/checkmate/annotation symbols
+                    move = move.replace(/^\d+\.\s*\.{3}\s*/, ''); // Remove "1. ... " notation
+                    move = move.replace(/^\d+\.\s*/, ''); // Remove move numbers
+                    
+                    console.log('Found move:', move);
+                    return move;
+                }
             }
         }
         
-        // Fallback: return the last non-empty line
-        return lines[lines.length - 1];
+        // If no clear move pattern found, try to extract from the last line
+        const lastLine = lines[lines.length - 1];
+        
+        // Remove common prefixes and suffixes
+        let cleanedLine = lastLine
+            .replace(/^(Selected move|Move|Final move|I play|My move):\s*/i, '')
+            .replace(/^\d+\.\s*\.{3}\s*/, '')
+            .replace(/^\d+\.\s*/, '')
+            .replace(/[+#!?]*$/, '')
+            .trim();
+        
+        // If it looks like a move, return it
+        if (/^[a-h][1-8]$|^[KQRBN][a-h][1-8]$|^O-O|^[a-h]x[a-h][1-8]$/.test(cleanedLine)) {
+            console.log('Extracted move from last line:', cleanedLine);
+            return cleanedLine;
+        }
+        
+        console.log('Could not parse move from text, returning last line:', lastLine);
+        return lastLine;
     }
 
     async getOpenAIResponse(systemPrompt, userPrompt) {

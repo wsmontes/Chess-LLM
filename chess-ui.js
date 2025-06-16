@@ -353,6 +353,9 @@ class ChessUI {
             return;
         }
 
+        // IMPORTANT: Always update status after analyzing check position
+        this.updateStatus();
+
         // Get LLM move if it's black's turn and game is still playing
         if (this.engine.currentPlayer === 'black' && this.engine.gameState !== 'checkmate') {
             await this.getLLMMove();
@@ -384,10 +387,14 @@ class ChessUI {
                 throw new Error('Not connected to LM Studio: ' + connectionTest.message);
             }
 
-            // Get move from LLM
+            // Get move from LLM - pass attempt count for better feedback
             let moveNotation;
             try {
-                moveNotation = await this.llm.getChessMove(this.engine, this.engine.moveHistory, previousAttempt);
+                const attemptData = previousAttempt ? {
+                    ...previousAttempt,
+                    attemptNumber: attemptCount + 1
+                } : null;
+                moveNotation = await this.llm.getChessMove(this.engine, this.engine.moveHistory, attemptData);
             } catch (parseError) {
                 // Check if this is a confirmation request
                 if (parseError.message.includes('requesting confirmation') || 
@@ -413,9 +420,16 @@ class ChessUI {
                     const newAttempt = {
                         move: moveNotation,
                         reason: validationResult.reason,
-                        availableMoves: validationResult.availableMoves
+                        availableMoves: validationResult.availableMoves,
+                        piecePositions: validationResult.piecePositions,
+                        currentPosition: validationResult.currentPosition,
+                        attemptNumber: attemptCount + 1
                     };
-                    return await this.getLLMMove(newAttempt, attemptCount + 1);
+                    // Add small delay before retry
+                    setTimeout(() => {
+                        this.getLLMMove(newAttempt, attemptCount + 1);
+                    }, 1000);
+                    return;
                 } else {
                     throw new Error(`LLM failed to provide valid move after ${maxAttempts} attempts. Last attempt: "${moveNotation}" - ${validationResult.reason}`);
                 }
@@ -448,7 +462,9 @@ class ChessUI {
             this.isWaitingForLLM = false;
             this.showThinking(false);
             this.showThinkingStreamIndicator(false);
+            // IMPORTANT: Always update status and display when LLM is done
             this.updateStatus();
+            this.updateDisplay();
         }
     }
 
@@ -471,6 +487,7 @@ class ChessUI {
         try {
             // Get all possible moves for black pieces
             const possibleMoves = [];
+            const piecePositions = new Map(); // Track where each piece type is located
             
             for (let rank = 0; rank < 8; rank++) {
                 for (let file = 0; file < 8; file++) {
@@ -478,6 +495,13 @@ class ChessUI {
                     if (piece && piece.color === 'black') {
                         const square = this.engine.squareToString(file, rank);
                         const moves = this.engine.getValidMoves(square);
+                        
+                        // Track piece positions for better error messages
+                        if (!piecePositions.has(piece.type)) {
+                            piecePositions.set(piece.type, []);
+                        }
+                        piecePositions.get(piece.type).push(square);
+                        
                         moves.forEach(move => {
                             const notation = this.engine.generateMoveNotation(square, move, piece, this.engine.getPiece(move));
                             possibleMoves.push({
@@ -497,45 +521,14 @@ class ChessUI {
             const matchingMove = this.findBestMoveMatch(moveNotation, possibleMoves);
             
             if (!matchingMove) {
-                let reason = `Move "${moveNotation}" is not legal in the current position.`;
-                
-                // Provide detailed feedback based on the attempted move
-                if (/^[KQRBN][a-h][1-8]$/.test(moveNotation)) {
-                    const pieceType = {
-                        'K': 'king', 'Q': 'queen', 'R': 'rook',
-                        'B': 'bishop', 'N': 'knight'
-                    }[moveNotation[0]];
-                    const destination = moveNotation.slice(1);
-                    
-                    const piecesOfType = possibleMoves.filter(m => m.piece === pieceType);
-                    if (piecesOfType.length === 0) {
-                        reason += ` No ${pieceType} can move right now.`;
-                    } else {
-                        const pieceSquares = [...new Set(piecesOfType.map(m => m.from))];
-                        const validDestinations = [...new Set(piecesOfType.map(m => m.to))];
-                        reason += ` Your ${pieceType}(s) on ${pieceSquares.join(', ')} can move to: ${validDestinations.join(', ')}, but not to ${destination}.`;
-                    }
-                } else if (/^[a-h][1-8]$/.test(moveNotation)) {
-                    const destination = moveNotation;
-                    const pawnMoves = possibleMoves.filter(m => m.piece === 'pawn');
-                    if (pawnMoves.length === 0) {
-                        reason += ` No pawns can move right now.`;
-                    } else {
-                        const validPawnDestinations = [...new Set(pawnMoves.map(m => m.to))];
-                        reason += ` Your pawns can move to: ${validPawnDestinations.join(', ')}, but not to ${destination}.`;
-                    }
-                } else if (moveNotation.includes('x')) {
-                    reason += ` This appears to be a capture move, but it's not valid. Check if the piece can actually reach the target square and if there's a piece to capture.`;
-                } else {
-                    reason += ` Please use standard algebraic notation (e.g., e5, Nf6, Bxc4).`;
-                }
-                
-                reason += `\n\nAvailable moves: ${availableMoves.slice(0, 10).join(', ')}${availableMoves.length > 10 ? '...' : ''}`;
+                let reason = this.generateDetailedMoveError(moveNotation, possibleMoves, piecePositions);
                 
                 return {
                     isValid: false,
                     reason: reason,
-                    availableMoves: availableMoves
+                    availableMoves: availableMoves,
+                    piecePositions: Object.fromEntries(piecePositions),
+                    currentPosition: this.engine.getBoardAsFEN()
                 };
             }
             
@@ -545,514 +538,170 @@ class ChessUI {
             return {
                 isValid: false,
                 reason: `Error validating move: ${error.message}`,
-                availableMoves: []
+                availableMoves: [],
+                piecePositions: {},
+                currentPosition: this.engine.getBoardAsFEN()
             };
         }
     }
 
-    addRetryThinkingHeader(attemptNumber, previousAttempt) {
-        if (!this.isThinkingVisible) return;
+    generateDetailedMoveError(moveNotation, possibleMoves, piecePositions) {
+        let reason = `Move "${moveNotation}" is not legal in the current position.\n\n`;
         
-        const headerElement = document.createElement('div');
-        headerElement.className = 'thinking-retry-header';
-        headerElement.innerHTML = `
-            <div class="thinking-retry-separator"></div>
-            <div class="thinking-retry-title">
-                <i class="fas fa-redo"></i>
-                Retry Attempt ${attemptNumber + 1} - Correcting "${previousAttempt.move}"
-            </div>
-        `;
+        // Analyze the attempted move pattern
+        const cleanMove = moveNotation.trim();
         
-        this.thinkingContent.appendChild(headerElement);
-        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
-    }
-
-    addValidationErrorToThinking(moveNotation, reason) {
-        if (!this.isThinkingVisible) return;
-        
-        const errorStep = {
-            type: 'validation-error',
-            content: `❌ Invalid move attempted: "${moveNotation}"\nReason: ${reason}`
-        };
-        
-        const stepElement = this.createThinkingStep(errorStep, 0);
-        stepElement.style.borderLeftColor = '#ff9800';
-        stepElement.style.background = 'rgba(255, 152, 0, 0.05)';
-        this.thinkingContent.appendChild(stepElement);
-        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
-    }
-
-    addSuccessAfterRetryToThinking(totalAttempts) {
-        if (!this.isThinkingVisible) return;
-        
-        const successStep = {
-            type: 'retry-success',
-            content: `✅ Valid move found after ${totalAttempts} attempts`
-        };
-        
-        const stepElement = this.createThinkingStep(successStep, 0);
-        stepElement.style.borderLeftColor = '#4caf50';
-        stepElement.style.background = 'rgba(76, 175, 80, 0.05)';
-        this.thinkingContent.appendChild(stepElement);
-        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
-    }
-
-    createThinkingStep(step, index) {
-        const stepElement = document.createElement('div');
-        stepElement.className = `thinking-step ${step.type}`;
-        
-        const labels = {
-            'analysis': 'Position Analysis',
-            'evaluation': 'Move Evaluation',
-            'decision': 'Decision Making',
-            'final': 'Final Move',
-            'validation-error': 'Move Validation Error',
-            'retry-success': 'Retry Success',
-            'confirmation-request': 'Move Clarification'
-        };
-
-        stepElement.innerHTML = `
-            <div class="thinking-step-label">${labels[step.type] || 'Thinking'}</div>
-            <div class="thinking-step-content">${this.escapeHtml(step.content)}</div>
-        `;
-
-        return stepElement;
-    }
-
-    clearThinkingDisplay() {
-        this.currentThinkingSteps = [];
-        this.thinkingContent.innerHTML = '';
-    }
-
-    showThinkingStreamIndicator(show) {
-        const existing = this.thinkingContent.querySelector('.thinking-stream-indicator');
-        
-        if (show && !existing) {
-            const indicator = document.createElement('div');
-            indicator.className = 'thinking-stream-indicator';
-            indicator.innerHTML = `
-                <i class="fas fa-brain"></i>
-                <span>LLM is analyzing the position...</span>
-            `;
-            this.thinkingContent.appendChild(indicator);
-        } else if (!show && existing) {
-            existing.remove();
-        }
-    }
-
-    addFinalMoveToThinking(move) {
-        const finalStep = {
-            type: 'final',
-            content: `Selected move: ${move}`
-        };
-        
-        this.currentThinkingSteps.push(finalStep);
-        
-        if (this.isThinkingVisible) {
-            const stepElement = this.createThinkingStep(finalStep, this.currentThinkingSteps.length - 1);
-            this.thinkingContent.appendChild(stepElement);
-            this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
-        }
-    }
-
-    addErrorToThinking(error) {
-        const errorStep = {
-            type: 'error',
-            content: `Error: ${error}`
-        };
-        
-        if (this.isThinkingVisible) {
-            const stepElement = this.createThinkingStep(errorStep, 0);
-            stepElement.style.borderLeftColor = '#f44336';
-            stepElement.style.background = 'rgba(244, 67, 54, 0.05)';
-            this.thinkingContent.appendChild(stepElement);
-        }
-    }
-
-    addMoveThinkingHeader() {
-        if (!this.isThinkingVisible) return;
-        
-        // Only add header if this isn't the first move or if there's already content
-        const hasExistingContent = this.thinkingContent.children.length > 0 && 
-            !this.thinkingContent.querySelector('.thinking-placeholder');
-        
-        if (hasExistingContent) {
-            const moveNumber = Math.ceil((this.engine.moveHistory.length + 1) / 2);
-            const headerElement = document.createElement('div');
-            headerElement.className = 'thinking-move-header';
-            headerElement.innerHTML = `
-                <div class="thinking-move-separator"></div>
-                <div class="thinking-move-title">
-                    <i class="fas fa-chess"></i>
-                    Move ${moveNumber} - Black's Turn
-                </div>
-            `;
-            
-            this.thinkingContent.appendChild(headerElement);
-        } else {
-            // For the first move, just add the title without separator
-            const moveNumber = Math.ceil((this.engine.moveHistory.length + 1) / 2);
-            const headerElement = document.createElement('div');
-            headerElement.className = 'thinking-move-header';
-            headerElement.innerHTML = `
-                <div class="thinking-move-title">
-                    <i class="fas fa-chess"></i>
-                    Move ${moveNumber} - Black's Turn
-                </div>
-            `;
-            
-            // Remove placeholder if it exists
-            const placeholder = this.thinkingContent.querySelector('.thinking-placeholder');
-            if (placeholder) {
-                placeholder.remove();
-            }
-            
-            this.thinkingContent.appendChild(headerElement);
-        }
-        
-        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    parseAndExecuteMove(moveNotation) {
-        try {
-            console.log('Attempting to parse move:', moveNotation);
-            console.log('Current player:', this.engine.currentPlayer);
-            console.log('Current FEN:', this.engine.getBoardAsFEN());
-            
-            // Get all possible moves for black pieces
-            const possibleMoves = [];
-            
-            for (let rank = 0; rank < 8; rank++) {
-                for (let file = 0; file < 8; file++) {
-                    const piece = this.engine.board[rank][file];
-                    if (piece && piece.color === 'black') {
-                        const square = this.engine.squareToString(file, rank);
-                        const moves = this.engine.getValidMoves(square);
-                        moves.forEach(move => {
-                            possibleMoves.push({
-                                from: square,
-                                to: move,
-                                piece: piece.type,
-                                notation: this.engine.generateMoveNotation(square, move, piece, this.engine.getPiece(move))
-                            });
-                        });
-                    }
-                }
-            }
-
-            console.log('Available moves for Black:', possibleMoves.map(m => `${m.notation} (${m.piece} ${m.from}-${m.to})`));
-
-            // Find matching move with more sophisticated matching
-            let matchingMove = this.findBestMoveMatch(moveNotation, possibleMoves);
-
-            if (!matchingMove) {
-                console.error(`No valid move found for "${moveNotation}".`);
-                console.log('Available moves by type:');
-                const movesByType = {};
-                possibleMoves.forEach(move => {
-                    if (!movesByType[move.piece]) movesByType[move.piece] = [];
-                    movesByType[move.piece].push(move.notation);
-                });
-                console.log(movesByType);
-                
-                // Try to suggest a similar move
-                const suggestion = this.suggestAlternativeMove(moveNotation, possibleMoves);
-                if (suggestion) {
-                    console.log(`Using alternative move: ${suggestion.notation} instead of ${moveNotation}`);
-                    matchingMove = suggestion;
-                } else {
-                    throw new Error(`Could not find valid move for notation: ${moveNotation}`);
-                }
-            }
-
-            console.log('Executing move:', matchingMove);
-            
-            // Execute the move
-            return this.engine.makeMove(matchingMove.from, matchingMove.to);
-
-        } catch (error) {
-            console.error('Error parsing move:', error);
-            throw error;
-        }
-    }
-
-    suggestAlternativeMove(invalidMove, possibleMoves) {
-        // Define central squares for development preference
-        const centerSquares = ['d4', 'd5', 'e4', 'e5', 'c4', 'c5', 'f4', 'f5', 'c6', 'f6', 'c3', 'f3'];
-
-        // Try to find a reasonable alternative when the LLM suggests an invalid move
-        
-        // If it's trying to move a bishop in starting position, suggest a good opening move instead
-        if (/^B[a-h][1-8]$/.test(invalidMove)) {
-            console.log('LLM tried to move bishop - suggesting opening move instead');
-            
-            // Prefer good opening moves for Black
-            const openingPreferences = ['e5', 'e6', 'd5', 'd6', 'Nf6', 'Nc6', 'c5', 'c6'];
-            
-            for (const pref of openingPreferences) {
-                const match = possibleMoves.find(move => move.notation === pref);
-                if (match) {
-                    console.log(`Suggesting opening move: ${pref}`);
-                    return match;
-                }
-            }
-        }
-        
-        // If it's trying to capture something that doesn't exist, find a similar development move
-        if (invalidMove.includes('x')) {
-            const targetSquare = invalidMove.match(/x([a-h][1-8])/);
-            if (targetSquare) {
-                // Look for moves to nearby squares
-                const target = targetSquare[1];
-                const targetFile = target[0];
-                const targetRank = parseInt(target[1]);
-                
-                // Find moves to adjacent squares
-                for (const move of possibleMoves) {
-                    const moveFile = move.to[0];
-                    const moveRank = parseInt(move.to[1]);
-                    
-                    if (Math.abs(moveFile.charCodeAt(0) - targetFile.charCodeAt(0)) <= 1 &&
-                        Math.abs(moveRank - targetRank) <= 1) {
-                        return move;
-                    }
-                }
-            }
-        }
-        
-        // If it's a piece move to an invalid square, try to find the same piece moving elsewhere
-        if (/^[KQRBN]/.test(invalidMove)) {
+        // Check for specific error patterns
+        if (/^[KQRBN][a-h][1-8]$/.test(cleanMove)) {
+            // Piece move to specific square
             const pieceType = {
                 'K': 'king', 'Q': 'queen', 'R': 'rook',
                 'B': 'bishop', 'N': 'knight'
-            }[invalidMove[0]];
+            }[cleanMove[0]];
+            const destination = cleanMove.slice(1);
             
-            const samePieceMoves = possibleMoves.filter(move => move.piece === pieceType);
-            if (samePieceMoves.length > 0) {
-                const developmentMove = samePieceMoves.find(move => 
-                    centerSquares.includes(move.to) || 
-                    ['c6', 'f6', 'c3', 'f3'].includes(move.to)
-                );
-                
-                return developmentMove || samePieceMoves[0];
+            const piecesOfType = possibleMoves.filter(m => m.piece === pieceType);
+            const currentPositions = piecePositions.get(pieceType) || [];
+            
+            if (piecesOfType.length === 0) {
+                reason += `PROBLEM: No ${pieceType} can move right now.\n`;
+                reason += `CURRENT POSITION: Your ${pieceType} is on ${currentPositions.join(', ')}\n`;
+                reason += `BLOCKING ISSUE: The ${pieceType} is blocked by other pieces or cannot reach any squares.\n\n`;
+            } else {
+                const validDestinations = [...new Set(piecesOfType.map(m => m.to))];
+                reason += `PROBLEM: Your ${pieceType} cannot move to ${destination}.\n`;
+                reason += `CURRENT POSITION: Your ${pieceType} is on ${currentPositions.join(', ')}\n`;
+                reason += `VALID DESTINATIONS: ${validDestinations.join(', ')}\n\n`;
             }
-        }
-        
-        // If it's a pawn move, try to find a good pawn move
-        if (/^[a-h][1-8]$/.test(invalidMove)) {
-            const pawnMoves = possibleMoves.filter(move => move.piece === 'pawn');
-            if (pawnMoves.length > 0) {
-                // Prefer central pawn moves
-                const centralPawnMoves = pawnMoves.filter(move => 
-                    ['d5', 'e5', 'd6', 'e6', 'c5', 'f5'].includes(move.to)
-                );
-                return centralPawnMoves[0] || pawnMoves[0];
+            
+        } else if (/^[a-h][1-8]$/.test(cleanMove)) {
+            // Pawn move
+            const destination = cleanMove;
+            const pawnMoves = possibleMoves.filter(m => m.piece === 'pawn');
+            const pawnPositions = piecePositions.get('pawn') || [];
+            
+            if (pawnMoves.length === 0) {
+                reason += `PROBLEM: No pawns can move right now.\n`;
+                reason += `CURRENT POSITION: Your pawns are on ${pawnPositions.join(', ')}\n`;
+                reason += `BLOCKING ISSUE: All pawns are blocked or cannot advance.\n\n`;
+            } else {
+                const validPawnDestinations = [...new Set(pawnMoves.map(m => m.to))];
+                reason += `PROBLEM: No pawn can move to ${destination}.\n`;
+                reason += `CURRENT POSITION: Your pawns are on ${pawnPositions.join(', ')}\n`;
+                reason += `VALID PAWN MOVES: ${validPawnDestinations.join(', ')}\n\n`;
             }
-        }
-        
-        // Last resort: suggest a good opening move
-        console.log('No specific alternative found - suggesting best opening move');
-        const goodOpeningMoves = ['e5', 'e6', 'Nf6', 'Nc6', 'd5', 'd6', 'c5'];
-        
-        for (const move of goodOpeningMoves) {
-            const match = possibleMoves.find(m => m.notation === move);
+            
+        } else if (cleanMove.includes('x')) {
+            // Capture move
+            const capturePattern = /^([KQRBN]?)([a-h]?)x([a-h][1-8])$/;
+            const match = capturePattern.exec(cleanMove);
+            
             if (match) {
-                console.log(`Fallback to opening move: ${move}`);
-                return match;
-            }
-        }
-        
-        return null;
-    }
-
-    findBestMoveMatch(moveNotation, possibleMoves) {
-        const cleaned = moveNotation.trim();
-        
-        // 1. Try exact notation match
-        let match = possibleMoves.find(move => 
-            move.notation.toLowerCase() === cleaned.toLowerCase()
-        );
-        if (match) return match;
-
-        // 2. For simple square moves like "e5", find pawn moves to that square
-        if (/^[a-h][1-8]$/.test(cleaned)) {
-            match = possibleMoves.find(move => 
-                move.to === cleaned && move.piece === 'pawn'
-            );
-            if (match) return match;
-            
-            // Also try piece moves to that square
-            match = possibleMoves.find(move => move.to === cleaned);
-            if (match) return match;
-        }
-
-        // 3. For piece moves like "Nf6", match piece type and destination
-        if (/^[KQRBN][a-h][1-8]$/.test(cleaned)) {
-            const pieceMap = {
-                'K': 'king', 'Q': 'queen', 'R': 'rook',
-                'B': 'bishop', 'N': 'knight'
-            };
-            const pieceType = pieceMap[cleaned[0]];
-            const destination = cleaned.slice(1);
-            
-            match = possibleMoves.find(move => 
-                move.piece === pieceType && move.to === destination
-            );
-            if (match) return match;
-        }
-
-        // 4. For captures like "exd5", match file and destination
-        if (/^[a-h]x[a-h][1-8]$/.test(cleaned)) {
-            const fromFile = cleaned[0];
-            const destination = cleaned.slice(2);
-            
-            match = possibleMoves.find(move => 
-                move.from[0] === fromFile && 
-                move.to === destination && 
-                move.notation.includes('x')
-            );
-            if (match) return match;
-        }
-
-        // 5. For piece captures like "Nxe4", match piece type and destination
-        if (/^[KQRBN]x[a-h][1-8]$/.test(cleaned)) {
-            const pieceMap = {
-                'K': 'king', 'Q': 'queen', 'R': 'rook',
-                'B': 'bishop', 'N': 'knight'
-            };
-            const pieceType = pieceMap[cleaned[0]];
-            const destination = cleaned.slice(2);
-            
-            match = possibleMoves.find(move => 
-                move.piece === pieceType && 
-                move.to === destination && 
-                move.notation.includes('x')
-            );
-            if (match) return match;
-        }
-
-        // 6. Fuzzy matching - find moves that contain the destination square
-        if (/[a-h][1-8]/.test(cleaned)) {
-            const squareMatch = cleaned.match(/([a-h][1-8])/);
-            if (squareMatch) {
-                const square = squareMatch[1];
-                match = possibleMoves.find(move => move.to === square);
-                if (match) {
-                    console.log(`Fuzzy match: "${cleaned}" -> ${match.notation}`);
-                    return match;
+                const [, pieceSymbol, fromFile, targetSquare] = match;
+                const targetPiece = this.engine.getPiece(targetSquare);
+                
+                reason += `PROBLEM: Capture move "${cleanMove}" is not possible.\n`;
+                
+                if (!targetPiece) {
+                    reason += `TARGET SQUARE: ${targetSquare} is empty - nothing to capture.\n`;
+                } else if (targetPiece.color === 'black') {
+                    reason += `TARGET SQUARE: ${targetSquare} contains your own ${targetPiece.type} - cannot capture own pieces.\n`;
+                } else {
+                    reason += `TARGET SQUARE: ${targetSquare} contains opponent's ${targetPiece.type}, but no piece can capture it.\n`;
+                    
+                    // Show which pieces could potentially capture
+                    const captureMoves = possibleMoves.filter(m => m.to === targetSquare);
+                    if (captureMoves.length > 0) {
+                        reason += `AVAILABLE CAPTURES: ${captureMoves.map(m => m.notation).join(', ')}\n`;
+                    }
                 }
+                reason += '\n';
+            }
+            
+        } else if (/^[Oo0]/.test(cleanMove)) {
+            // Castling
+            reason += `PROBLEM: Castling "${cleanMove}" is not possible.\n`;
+            const canKingside = this.engine.canCastle('black', 'kingside');
+            const canQueenside = this.engine.canCastle('black', 'queenside');
+            
+            reason += `KINGSIDE CASTLING: ${canKingside ? 'Available' : 'Not available'}\n`;
+            reason += `QUEENSIDE CASTLING: ${canQueenside ? 'Available' : 'Not available'}\n`;
+            
+            if (!canKingside && !canQueenside) {
+                reason += `REASON: King or rook has moved, or king is in check, or squares are occupied.\n`;
+            }
+            reason += '\n';
+            
+        } else {
+            // Unrecognized move format
+            reason += `PROBLEM: Move format "${cleanMove}" is not recognized.\n`;
+            reason += `EXPECTED FORMATS:\n`;
+            reason += `- Pawn moves: e5, d6, etc.\n`;
+            reason += `- Piece moves: Nf6, Bb5, Qd8, etc.\n`;
+            reason += `- Captures: exd5, Nxf6, etc.\n`;
+            reason += `- Castling: O-O (kingside), O-O-O (queenside)\n\n`;
+        }
+        
+        // Add analysis of current position
+        reason += `CURRENT POSITION ANALYSIS:\n`;
+        reason += `- Move number: ${Math.ceil((this.engine.moveHistory.length + 1) / 2)}\n`;
+        reason += `- You are playing as BLACK\n`;
+        reason += `- It's your turn to move\n`;
+        
+        // Show piece development status
+        const developedPieces = [];
+        const undevelopedPieces = [];
+        
+        for (const [pieceType, positions] of piecePositions.entries()) {
+            if (pieceType === 'pawn') continue;
+            
+            const startingSquares = this.getStartingSquares('black', pieceType);
+            const developed = positions.filter(pos => !startingSquares.includes(pos));
+            const undeveloped = positions.filter(pos => startingSquares.includes(pos));
+            
+            if (developed.length > 0) {
+                developedPieces.push(`${pieceType}: ${developed.join(', ')}`);
+            }
+            if (undeveloped.length > 0) {
+                undevelopedPieces.push(`${pieceType}: ${undeveloped.join(', ')}`);
             }
         }
-
-        return null;
+        
+        if (developedPieces.length > 0) {
+            reason += `- Developed pieces: ${developedPieces.join('; ')}\n`;
+        }
+        if (undevelopedPieces.length > 0) {
+            reason += `- Undeveloped pieces: ${undevelopedPieces.join('; ')}\n`;
+        }
+        
+        reason += '\n';
+        
+        // Show top 5 recommended moves
+        const topMoves = possibleMoves.slice(0, 5).map(m => m.notation);
+        reason += `RECOMMENDED MOVES (choose one): ${topMoves.join(', ')}`;
+        
+        return reason;
     }
 
-    async makeRandomMove() {
-        // Fallback: make a random valid move
-        const possibleMoves = [];
-        
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const piece = this.engine.board[rank][file];
-                if (piece && piece.color === 'black') {
-                    const square = this.engine.squareToString(file, rank);
-                    const moves = this.engine.getValidMoves(square);
-                    moves.forEach(move => {
-                        possibleMoves.push({ from: square, to: move });
-                    });
-                }
+    getStartingSquares(color, pieceType) {
+        const startingSquares = {
+            'black': {
+                'rook': ['a8', 'h8'],
+                'knight': ['b8', 'g8'],
+                'bishop': ['c8', 'f8'],
+                'queen': ['d8'],
+                'king': ['e8']
+            },
+            'white': {
+                'rook': ['a1', 'h1'],
+                'knight': ['b1', 'g1'],
+                'bishop': ['c1', 'f1'],
+                'queen': ['d1'],
+                'king': ['e1']
             }
-        }
-
-        if (possibleMoves.length > 0) {
-            const randomMove = possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
-            const move = this.engine.makeMove(randomMove.from, randomMove.to);
-            this.showError('LLM failed - made random move');
-            return move;
-        }
-    }
-
-    updateDisplay() {
-        this.initializeBoard();
-        this.updateBoardHighlights();
-        this.updateStatus();
-        this.updateControls();
-    }
-
-    updateStatus() {
-        if (this.isWaitingForLLM) {
-            return; // Don't override status when LLM is thinking
-        }
-
-        let status = '';
-        const currentPlayerName = this.engine.currentPlayer === 'white' ? 'White' : 'Black';
-        const playerDescription = this.engine.currentPlayer === 'white' ? 'Your turn' : 'LLM\'s turn';
-
-        switch (this.engine.gameState) {
-            case 'check':
-                status = `${playerDescription} - ${currentPlayerName} is in check! Find a way to escape.`;
-                break;
-            case 'checkmate':
-                const winner = this.engine.currentPlayer === 'white' ? 'Black (LLM)' : 'White (You)';
-                status = `Checkmate! ${winner} wins!`;
-                break;
-            case 'stalemate':
-                status = 'Stalemate - Draw!';
-                break;
-            case 'draw':
-                status = 'Draw by 50-move rule!';
-                break;
-            default:
-                status = `${playerDescription} - ${currentPlayerName} to move`;
-        }
-
-        this.statusText.textContent = status;
-    }
-
-    updateControls() {
-        const undoBtn = document.getElementById('undo-btn');
-        undoBtn.disabled = this.engine.moveHistory.length === 0 || this.isWaitingForLLM;
-
-        const hintBtn = document.getElementById('hint-btn');
-        hintBtn.disabled = this.engine.currentPlayer !== 'white' || this.isWaitingForLLM || this.engine.gameState !== 'playing';
-    }
-
-    addMoveToHistory(move) {
-        const moveEntry = document.createElement('div');
-        moveEntry.className = 'move-entry';
+        };
         
-        const moveNumber = Math.ceil(this.engine.moveHistory.length / 2);
-        const isWhiteMove = this.engine.moveHistory.length % 2 === 1;
-        
-        moveEntry.innerHTML = `
-            <span class="move-number">${isWhiteMove ? moveNumber + '.' : ''}</span>
-            <span class="move-notation">${move.notation}</span>
-        `;
-
-        // Remove "no moves" message if present
-        const noMoves = this.movesContainer.querySelector('.no-moves');
-        if (noMoves) {
-            noMoves.remove();
-        }
-
-        this.movesContainer.appendChild(moveEntry);
-        this.movesContainer.scrollTop = this.movesContainer.scrollHeight;
-    }
-
-    showThinking(show) {
-        this.thinkingIndicator.classList.toggle('active', show);
-    }
-
-    showError(message) {
-        // Simple error display - you could enhance this with a toast or modal
-        console.error(message);
-        alert(message);
+        return startingSquares[color]?.[pieceType] || [];
     }
 
     handleGameEnd() {
@@ -1476,6 +1125,564 @@ class ChessUI {
             text.textContent = 'Connection failed';
         }
     }
+
+    updateThinkingDisplay(steps) {
+        this.currentThinkingSteps = steps;
+        
+        if (!this.isThinkingVisible) return;
+
+        // Find the current move's thinking section (after the last header)
+        const headers = this.thinkingContent.querySelectorAll('.thinking-move-header');
+        const lastHeader = headers[headers.length - 1];
+        
+        // Remove all thinking steps after the last header (current move's thinking)
+        if (lastHeader) {
+            let nextElement = lastHeader.nextElementSibling;
+            while (nextElement) {
+                const toRemove = nextElement;
+                nextElement = nextElement.nextElementSibling;
+                if (!toRemove.classList.contains('thinking-move-header') && 
+                    !toRemove.classList.contains('thinking-stream-indicator') &&
+                    !toRemove.classList.contains('thinking-retry-header')) {
+                    toRemove.remove();
+                }
+            }
+        }
+
+        // Remove stream indicator if it exists
+        const indicator = this.thinkingContent.querySelector('.thinking-stream-indicator');
+        if (indicator) {
+            indicator.remove();
+        }
+
+        // Add current thinking steps
+        steps.forEach((step, index) => {
+            const stepElement = this.createThinkingStep(step, index);
+            this.thinkingContent.appendChild(stepElement);
+        });
+
+        // Auto-scroll to bottom
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+
+    addRetryThinkingHeader(attemptNumber, previousAttempt) {
+        if (!this.isThinkingVisible) return;
+        
+        const headerElement = document.createElement('div');
+        headerElement.className = 'thinking-retry-header';
+        headerElement.innerHTML = `
+            <div class="thinking-retry-separator"></div>
+            <div class="thinking-retry-title">
+                <i class="fas fa-redo"></i>
+                Retry Attempt ${attemptNumber + 1} - Correcting "${previousAttempt.move}"
+            </div>
+        `;
+        
+        this.thinkingContent.appendChild(headerElement);
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+
+    addValidationErrorToThinking(moveNotation, reason) {
+        if (!this.isThinkingVisible) return;
+        
+        const errorStep = {
+            type: 'validation-error',
+            content: `❌ Invalid move attempted: "${moveNotation}"\nReason: ${reason}`
+        };
+        
+        const stepElement = this.createThinkingStep(errorStep, 0);
+        stepElement.style.borderLeftColor = '#ff9800';
+        stepElement.style.background = 'rgba(255, 152, 0, 0.05)';
+        this.thinkingContent.appendChild(stepElement);
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+
+    addSuccessAfterRetryToThinking(totalAttempts) {
+        if (!this.isThinkingVisible) return;
+        
+        const successStep = {
+            type: 'retry-success',
+            content: `✅ Valid move found after ${totalAttempts} attempts`
+        };
+        
+        const stepElement = this.createThinkingStep(successStep, 0);
+        stepElement.style.borderLeftColor = '#4caf50';
+        stepElement.style.background = 'rgba(76, 175, 80, 0.05)';
+        this.thinkingContent.appendChild(stepElement);
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+
+    createThinkingStep(step, index) {
+        const stepElement = document.createElement('div');
+        stepElement.className = `thinking-step ${step.type}`;
+        
+        const labels = {
+            'analysis': 'Position Analysis',
+            'evaluation': 'Move Evaluation',
+            'decision': 'Decision Making',
+            'final': 'Final Move',
+            'validation-error': 'Move Validation Error',
+            'retry-success': 'Retry Success',
+            'confirmation-request': 'Move Clarification'
+        };
+
+        stepElement.innerHTML = `
+            <div class="thinking-step-label">${labels[step.type] || 'Thinking'}</div>
+            <div class="thinking-step-content">${this.escapeHtml(step.content)}</div>
+        `;
+
+        return stepElement;
+    }
+
+    clearThinkingDisplay() {
+        this.currentThinkingSteps = [];
+        this.thinkingContent.innerHTML = '';
+    }
+
+    showThinkingStreamIndicator(show) {
+        const existing = this.thinkingContent.querySelector('.thinking-stream-indicator');
+        
+        if (show && !existing) {
+            const indicator = document.createElement('div');
+            indicator.className = 'thinking-stream-indicator';
+            indicator.innerHTML = `
+                <i class="fas fa-brain"></i>
+                <span>LLM is analyzing the position...</span>
+            `;
+            this.thinkingContent.appendChild(indicator);
+        } else if (!show && existing) {
+            existing.remove();
+        }
+    }
+
+    addFinalMoveToThinking(move) {
+        const finalStep = {
+            type: 'final',
+            content: `Selected move: ${move}`
+        };
+        
+        this.currentThinkingSteps.push(finalStep);
+        
+        if (this.isThinkingVisible) {
+            const stepElement = this.createThinkingStep(finalStep, this.currentThinkingSteps.length - 1);
+            this.thinkingContent.appendChild(stepElement);
+            this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+        }
+    }
+
+    addErrorToThinking(error) {
+        const errorStep = {
+            type: 'error',
+            content: `Error: ${error}`
+        };
+        
+        if (this.isThinkingVisible) {
+            const stepElement = this.createThinkingStep(errorStep, 0);
+            stepElement.style.borderLeftColor = '#f44336';
+            stepElement.style.background = 'rgba(244, 67, 54, 0.05)';
+            this.thinkingContent.appendChild(stepElement);
+        }
+    }
+
+    addMoveThinkingHeader() {
+        if (!this.isThinkingVisible) return;
+        
+        // Only add header if this isn't the first move or if there's already content
+        const hasExistingContent = this.thinkingContent.children.length > 0 && 
+            !this.thinkingContent.querySelector('.thinking-placeholder');
+        
+        if (hasExistingContent) {
+            const moveNumber = Math.ceil((this.engine.moveHistory.length + 1) / 2);
+            const headerElement = document.createElement('div');
+            headerElement.className = 'thinking-move-header';
+            headerElement.innerHTML = `
+                <div class="thinking-move-separator"></div>
+                <div class="thinking-move-title">
+                    <i class="fas fa-chess"></i>
+                    Move ${moveNumber} - Black's Turn
+                </div>
+            `;
+            
+            this.thinkingContent.appendChild(headerElement);
+        } else {
+            // For the first move, just add the title without separator
+            const moveNumber = Math.ceil((this.engine.moveHistory.length + 1) / 2);
+            const headerElement = document.createElement('div');
+            headerElement.className = 'thinking-move-header';
+            headerElement.innerHTML = `
+                <div class="thinking-move-title">
+                    <i class="fas fa-chess"></i>
+                    Move ${moveNumber} - Black's Turn
+                </div>
+            `;
+            
+            // Remove placeholder if it exists
+            const placeholder = this.thinkingContent.querySelector('.thinking-placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+            
+            this.thinkingContent.appendChild(headerElement);
+        }
+        
+        this.thinkingContent.scrollTop = this.thinkingContent.scrollHeight;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    parseAndExecuteMove(moveNotation) {
+        try {
+            console.log('Attempting to parse move:', moveNotation);
+            console.log('Current player:', this.engine.currentPlayer);
+            console.log('Current FEN:', this.engine.getBoardAsFEN());
+            
+            // Get all possible moves for black pieces
+            const possibleMoves = [];
+            
+            for (let rank = 0; rank < 8; rank++) {
+                for (let file = 0; file < 8; file++) {
+                    const piece = this.engine.board[rank][file];
+                    if (piece && piece.color === 'black') {
+                        const square = this.engine.squareToString(file, rank);
+                        const moves = this.engine.getValidMoves(square);
+                        moves.forEach(move => {
+                            possibleMoves.push({
+                                from: square,
+                                to: move,
+                                piece: piece.type,
+                                notation: this.engine.generateMoveNotation(square, move, piece, this.engine.getPiece(move))
+                            });
+                        });
+                    }
+                }
+            }
+
+            console.log('Available moves for Black:', possibleMoves.map(m => `${m.notation} (${m.piece} ${m.from}-${m.to})`));
+
+            // Find matching move with more sophisticated matching
+            let matchingMove = this.findBestMoveMatch(moveNotation, possibleMoves);
+
+            if (!matchingMove) {
+                console.error(`No valid move found for "${moveNotation}".`);
+                console.log('Available moves by type:');
+                const movesByType = {};
+                possibleMoves.forEach(move => {
+                    if (!movesByType[move.piece]) movesByType[move.piece] = [];
+                    movesByType[move.piece].push(move.notation);
+                });
+                console.log(movesByType);
+                
+                // Try to suggest a similar move
+                const suggestion = this.suggestAlternativeMove(moveNotation, possibleMoves);
+                if (suggestion) {
+                    console.log(`Using alternative move: ${suggestion.notation} instead of ${moveNotation}`);
+                    matchingMove = suggestion;
+                } else {
+                    throw new Error(`Could not find valid move for notation: ${moveNotation}`);
+                }
+            }
+
+            console.log('Executing move:', matchingMove);
+            
+            // Execute the move
+            return this.engine.makeMove(matchingMove.from, matchingMove.to);
+
+        } catch (error) {
+            console.error('Error parsing move:', error);
+            throw error;
+        }
+    }
+
+    suggestAlternativeMove(invalidMove, possibleMoves) {
+        // Define central squares for development preference
+        const centerSquares = ['d4', 'd5', 'e4', 'e5', 'c4', 'c5', 'f4', 'f5', 'c6', 'f6', 'c3', 'f3'];
+
+        // Try to find a reasonable alternative when the LLM suggests an invalid move
+        
+        // If it's trying to move a bishop in starting position, suggest a good opening move instead
+        if (/^B[a-h][1-8]$/.test(invalidMove)) {
+            console.log('LLM tried to move bishop - suggesting opening move instead');
+            
+            // Prefer good opening moves for Black
+            const openingPreferences = ['e5', 'e6', 'd5', 'd6', 'Nf6', 'Nc6', 'c5', 'c6'];
+            
+            for (const pref of openingPreferences) {
+                const match = possibleMoves.find(move => move.notation === pref);
+                if (match) {
+                    console.log(`Suggesting opening move: ${pref}`);
+                    return match;
+                }
+            }
+        }
+        
+        // If it's trying to capture something that doesn't exist, find a similar development move
+        if (invalidMove.includes('x')) {
+            const targetSquare = invalidMove.match(/x([a-h][1-8])/);
+            if (targetSquare) {
+                // Look for moves to nearby squares
+                const target = targetSquare[1];
+                const targetFile = target[0];
+                const targetRank = parseInt(target[1]);
+                
+                // Find moves to adjacent squares
+                for (const move of possibleMoves) {
+                    const moveFile = move.to[0];
+                    const moveRank = parseInt(move.to[1]);
+                    
+                    if (Math.abs(moveFile.charCodeAt(0) - targetFile.charCodeAt(0)) <= 1 &&
+                        Math.abs(moveRank - targetRank) <= 1) {
+                        return move;
+                    }
+                }
+            }
+        }
+        
+        // If it's a piece move to an invalid square, try to find the same piece moving elsewhere
+        if (/^[KQRBN]/.test(invalidMove)) {
+            const pieceType = {
+                'K': 'king', 'Q': 'queen', 'R': 'rook',
+                'B': 'bishop', 'N': 'knight'
+            }[invalidMove[0]];
+            
+            const samePieceMoves = possibleMoves.filter(move => move.piece === pieceType);
+            if (samePieceMoves.length > 0) {
+                const developmentMove = samePieceMoves.find(move => 
+                    centerSquares.includes(move.to) || 
+                    ['c6', 'f6', 'c3', 'f3'].includes(move.to)
+                );
+                
+                return developmentMove || samePieceMoves[0];
+            }
+        }
+        
+        // If it's a pawn move, try to find a good pawn move
+        if (/^[a-h][1-8]$/.test(invalidMove)) {
+            const pawnMoves = possibleMoves.filter(move => move.piece === 'pawn');
+            if (pawnMoves.length > 0) {
+                // Prefer central pawn moves
+                const centralPawnMoves = pawnMoves.filter(move => 
+                    ['d5', 'e5', 'd6', 'e6', 'c5', 'f5'].includes(move.to)
+                );
+                return centralPawnMoves[0] || pawnMoves[0];
+            }
+        }
+        
+        // Last resort: suggest a good opening move
+        console.log('No specific alternative found - suggesting best opening move');
+        const goodOpeningMoves = ['e5', 'e6', 'Nf6', 'Nc6', 'd5', 'd6', 'c5'];
+        
+        for (const move of goodOpeningMoves) {
+            const match = possibleMoves.find(m => m.notation === move);
+            if (match) {
+                console.log(`Fallback to opening move: ${move}`);
+                return match;
+            }
+        }
+        
+        return null;
+    }
+
+    findBestMoveMatch(moveNotation, possibleMoves) {
+        const cleaned = moveNotation.trim();
+        
+        // Remove any move numbers or dots at the beginning
+        const cleanedMove = cleaned.replace(/^\d+\.\s*\.{3}\s*/, '').replace(/^\d+\.\s*/, '').trim();
+        
+        console.log(`Original: "${moveNotation}" -> Cleaned: "${cleanedMove}"`);
+        
+        // 1. Try exact notation match
+        let match = possibleMoves.find(move => 
+            move.notation.toLowerCase() === cleanedMove.toLowerCase()
+        );
+        if (match) return match;
+
+        // 2. Handle promotion notation (d1=Q, d8=Q, etc.)
+        if (/^[a-h][18]=[QRBN]$/.test(cleanedMove)) {
+            const square = cleanedMove.substring(0, 2);
+            match = possibleMoves.find(move => move.to === square && move.piece === 'pawn');
+            if (match) return match;
+        }
+
+        // 3. For simple square moves like "e5", find pawn moves to that square
+        if (/^[a-h][1-8]$/.test(cleanedMove)) {
+            match = possibleMoves.find(move => 
+                move.to === cleanedMove && move.piece === 'pawn'
+            );
+            if (match) return match;
+            
+            // Also try piece moves to that square
+            match = possibleMoves.find(move => move.to === cleanedMove);
+            if (match) return match;
+        }
+
+        // 4. For piece moves like "Nf6", match piece type and destination
+        if (/^[KQRBN][a-h][1-8]$/.test(cleanedMove)) {
+            const pieceMap = {
+                'K': 'king', 'Q': 'queen', 'R': 'rook',
+                'B': 'bishop', 'N': 'knight'
+            };
+            const pieceType = pieceMap[cleanedMove[0]];
+            const destination = cleanedMove.slice(1);
+            
+            match = possibleMoves.find(move => 
+                move.piece === pieceType && move.to === destination
+            );
+            if (match) return match;
+        }
+
+        // 5. For captures like "exd5", match file and destination
+        if (/^[a-h]x[a-h][1-8]$/.test(cleanedMove)) {
+            const fromFile = cleanedMove[0];
+            const destination = cleanedMove.slice(2);
+            
+            match = possibleMoves.find(move => 
+                move.from[0] === fromFile && 
+                move.to === destination && 
+                move.notation.includes('x')
+            );
+            if (match) return match;
+        }
+
+        // 6. For piece captures like "Nxe4", match piece type and destination
+        if (/^[KQRBN]x[a-h][1-8]$/.test(cleanedMove)) {
+            const pieceMap = {
+                'K': 'king', 'Q': 'queen', 'R': 'rook',
+                'B': 'bishop', 'N': 'knight'
+            };
+            const pieceType = pieceMap[cleanedMove[0]];
+            const destination = cleanedMove.slice(2);
+            
+            match = possibleMoves.find(move => 
+                move.piece === pieceType && 
+                move.to === destination && 
+                move.notation.includes('x')
+            );
+            if (match) return match;
+        }
+
+        // 7. Fuzzy matching - find moves that contain the destination square
+        if (/[a-h][1-8]/.test(cleanedMove)) {
+            const squareMatch = cleanedMove.match(/([a-h][1-8])/);
+            if (squareMatch) {
+                const square = squareMatch[1];
+                match = possibleMoves.find(move => move.to === square);
+                if (match) {
+                    console.log(`Fuzzy match: "${cleanedMove}" -> ${match.notation}`);
+                    return match;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    async makeRandomMove() {
+        // Fallback: make a random valid move
+        const possibleMoves = [];
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.engine.board[rank][file];
+                if (piece && piece.color === 'black') {
+                    const square = this.engine.squareToString(file, rank);
+                    const moves = this.engine.getValidMoves(square);
+                    moves.forEach(move => {
+                        possibleMoves.push({ from: square, to: move });
+                    });
+                }
+            }
+        }
+
+        if (possibleMoves.length > 0) {
+            const randomMove = possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
+            const move = this.engine.makeMove(randomMove.from, randomMove.to);
+            this.showError('LLM failed - made random move');
+            return move;
+        }
+    }
+
+    updateDisplay() {
+        this.initializeBoard();
+        this.updateBoardHighlights();
+        this.updateStatus();
+        this.updateControls();
+    }
+
+    updateStatus() {
+        if (this.isWaitingForLLM) {
+            return; // Don't override status when LLM is thinking
+        }
+
+        let status = '';
+        const currentPlayerName = this.engine.currentPlayer === 'white' ? 'White' : 'Black';
+        const playerDescription = this.engine.currentPlayer === 'white' ? 'Your turn' : 'LLM\'s turn';
+
+        switch (this.engine.gameState) {
+            case 'check':
+                status = `${playerDescription} - ${currentPlayerName} is in check! Find a way to escape.`;
+                break;
+            case 'checkmate':
+                const winner = this.engine.currentPlayer === 'white' ? 'Black (LLM)' : 'White (You)';
+                status = `Checkmate! ${winner} wins!`;
+                break;
+            case 'stalemate':
+                status = 'Stalemate - Draw!';
+                break;
+            case 'draw':
+                status = 'Draw by 50-move rule!';
+                break;
+            default:
+                status = `${playerDescription} - ${currentPlayerName} to move`;
+        }
+
+        this.statusText.textContent = status;
+    }
+
+    updateControls() {
+        const undoBtn = document.getElementById('undo-btn');
+        undoBtn.disabled = this.engine.moveHistory.length === 0 || this.isWaitingForLLM;
+
+        const hintBtn = document.getElementById('hint-btn');
+        hintBtn.disabled = this.engine.currentPlayer !== 'white' || this.isWaitingForLLM || this.engine.gameState === 'checkmate';
+    }
+
+    addMoveToHistory(move) {
+        const moveEntry = document.createElement('div');
+        moveEntry.className = 'move-entry';
+        
+        const moveNumber = Math.ceil(this.engine.moveHistory.length / 2);
+        const isWhiteMove = this.engine.moveHistory.length % 2 === 1;
+        
+        moveEntry.innerHTML = `
+            <span class="move-number">${isWhiteMove ? moveNumber + '.' : ''}</span>
+            <span class="move-notation">${move.notation}</span>
+        `;
+
+        // Remove "no moves" message if present
+        const noMoves = this.movesContainer.querySelector('.no-moves');
+        if (noMoves) {
+            noMoves.remove();
+        }
+
+        this.movesContainer.appendChild(moveEntry);
+        this.movesContainer.scrollTop = this.movesContainer.scrollHeight;
+    }
+
+    showThinking(show) {
+        this.thinkingIndicator.classList.toggle('active', show);
+    }
+
+    showError(message) {
+        // Simple error display - you could enhance this with a toast or modal
+        console.error(message);
+        alert(message);
+    }
+
+    // ...existing code...
 
     updateThinkingDisplay(steps) {
         this.currentThinkingSteps = steps;
