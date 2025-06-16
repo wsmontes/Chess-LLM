@@ -19,6 +19,18 @@ class LLMClient {
         this.isConnected = false;
     }
 
+    setModel(model) {
+        this.model = model;
+    }
+
+    setEndpoint(endpoint) {
+        this.endpoint = endpoint;
+    }
+
+    setTemperature(temperature) {
+        this.temperature = temperature;
+    }
+
     setOpenAIApiKey(apiKey) {
         this.openaiApiKey = apiKey;
         this.isConnected = false;
@@ -26,6 +38,18 @@ class LLMClient {
 
     setOpenAIModel(model) {
         this.openaiModel = model;
+    }
+
+    setThinkingCallback(callback) {
+        this.onThinkingUpdate = callback;
+    }
+
+    getStatus() {
+        return {
+            provider: this.provider,
+            connected: this.isConnected,
+            lastError: this.lastError
+        };
     }
 
     async testConnection() {
@@ -87,785 +111,25 @@ class LLMClient {
             const systemPrompt = this.buildSystemPrompt();
             const userPrompt = this.buildUserPrompt(gameState, moveHistory, previousAttempt);
 
+            let response;
             if (this.provider === 'openai') {
-                return await this.getChessMoveOpenAI(systemPrompt, userPrompt);
+                response = await this.getOpenAIResponse(systemPrompt, userPrompt);
             } else {
-                // Use streaming for LM Studio if thinking callback is available
-                if (this.onThinkingUpdate) {
-                    return await this.getChessMoveWithStreaming(systemPrompt, userPrompt);
-                } else {
-                    return await this.getChessMoveNormal(systemPrompt, userPrompt);
-                }
+                response = await this.getLMStudioResponse(systemPrompt, userPrompt);
             }
+            
+            if (this.onThinkingUpdate) {
+                this.parseAndUpdateThinking(response);
+            }
+            
+            return this.parseChessMove(response);
         } catch (error) {
             console.error('Error getting chess move from LLM:', error);
             throw error;
         }
     }
 
-    async getChessMoveOpenAI(systemPrompt, userPrompt) {
-        if (!this.openaiApiKey) {
-            throw new Error('OpenAI API key is required');
-        }
-
-        const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.openaiApiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: this.openaiModel,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: this.temperature,
-                max_tokens: 300,
-                stream: false
-            })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
-        }
-
-        const data = await response.json();
-        const moveText = data.choices[0].message.content.trim();
-        
-        // For OpenAI, simulate thinking display if callback is available
-        if (this.onThinkingUpdate) {
-            this.parseAndUpdateThinking(moveText);
-        }
-        
-        return this.parseChessMove(moveText);
-    }
-
-    async getChessMoveWithStreaming(systemPrompt, userPrompt) {
-        const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: this.temperature,
-                max_tokens: 300,
-                stream: true
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let fullResponse = '';
-        let lastUpdateLength = 0;
-
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') continue;
-
-                        try {
-                            const parsed = JSON.parse(data);
-                            const content = parsed.choices?.[0]?.delta?.content || '';
-                            
-                            if (content) {
-                                fullResponse += content;
-                                
-                                // Only update thinking display periodically to avoid spam
-                                if (fullResponse.length - lastUpdateLength > 20 || 
-                                    content.includes('\n') || 
-                                    /[.!?]/.test(content)) {
-                                    
-                                    if (this.onThinkingUpdate) {
-                                        this.parseAndUpdateThinking(fullResponse);
-                                    }
-                                    lastUpdateLength = fullResponse.length;
-                                }
-                            }
-                        } catch (e) {
-                            // Skip invalid JSON chunks
-                            continue;
-                        }
-                    }
-                }
-            }
-        } finally {
-            reader.releaseLock();
-        }
-
-        // Final update with complete response
-        if (this.onThinkingUpdate && fullResponse.length > lastUpdateLength) {
-            this.parseAndUpdateThinking(fullResponse);
-        }
-
-        return this.parseChessMove(fullResponse);
-    }
-
-    async getChessMoveNormal(systemPrompt, userPrompt) {
-        const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: this.temperature,
-                max_tokens: 300,
-                stream: false
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const moveText = data.choices[0].message.content.trim();
-        
-        return this.parseChessMove(moveText);
-    }
-
-    parseAndUpdateThinking(text) {
-        // Parse the LLM's thinking process and categorize it
-        const steps = this.categorizeThinking(text);
-        
-        if (this.onThinkingUpdate) {
-            this.onThinkingUpdate(steps);
-        }
-    }
-
-    categorizeThinking(text) {
-        const steps = [];
-    
-        // Split text into meaningful sections instead of creating steps for every character
-        const sections = this.parseThinkingSections(text);
-    
-        for (const section of sections) {
-            if (section.content.trim().length > 0) {
-                steps.push({
-                    type: section.type,
-                    content: section.content.trim()
-                });
-            }
-        }
-
-        return steps;
-    }
-
-    parseThinkingSections(text) {
-        const sections = [];
-        let currentType = 'analysis';
-        let currentContent = '';
-    
-        // Split by lines and process
-        const lines = text.split('\n');
-    
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            
-            // Detect section changes based on content
-            let newType = this.detectThinkingType(trimmed);
-            
-            // If type changed and we have content, save current section
-            if (newType !== currentType && currentContent.trim()) {
-                sections.push({
-                    type: currentType,
-                    content: currentContent.trim()
-                });
-                currentContent = '';
-            }
-            
-            currentType = newType;
-            currentContent += (currentContent ? ' ' : '') + trimmed;
-        }
-        
-        // Add final section if there's content
-        if (currentContent.trim()) {
-            sections.push({
-                type: currentType,
-                content: currentContent.trim()
-            });
-        }
-        
-        return sections;
-    }
-
-    detectThinkingType(text) {
-        const lower = text.toLowerCase();
-        
-        // Check for final move pattern first
-        if (/^[a-h][1-8]$|^[KQRBN][a-h][1-8]$|^O-O/.test(text.trim())) {
-            return 'final';
-        }
-        
-        // Check for decision indicators
-        if (lower.includes('best') || lower.includes('choose') || 
-            lower.includes('decision') || lower.includes('will play') ||
-            lower.includes('selected move')) {
-            return 'decision';
-        }
-        
-        // Check for evaluation indicators
-        if (lower.includes('considering') || lower.includes('option') ||
-            lower.includes('move evaluation') || lower.includes('candidate') ||
-            lower.includes('possible')) {
-            return 'evaluation';
-        }
-        
-        // Default to analysis
-        return 'analysis';
-    }
-
-    buildSystemPrompt() {
-        return `You are a chess grandmaster playing as BLACK pieces. You must analyze the CURRENT position carefully and respond with a valid chess move.
-
-CRITICAL INSTRUCTIONS:
-1. Study the FEN notation provided to understand the EXACT current position
-2. Consider ONLY the pieces that are currently on the board
-3. Remember that bishops and rooks cannot move if blocked by pawns or other pieces
-4. Knights can jump over pieces, but other pieces cannot
-5. Only suggest moves that are actually legal from the CURRENT position
-6. ALWAYS end your response with your chosen move on its own line
-7. The move must be in standard algebraic notation and must be legal
-
-ANALYSIS PROCESS:
-1. Look at the FEN to see where all pieces actually are
-2. Consider what moves are actually possible for YOUR pieces (not blocked by other pieces)
-3. Do NOT capture pieces that aren't there
-4. Do NOT move pieces that are blocked by pawns or other pieces
-5. Remember: bishops on c8/f8 cannot move in starting position due to pawn blockades
-
-You are playing BLACK pieces. Your move must be valid for Black in the CURRENT position.
-
-COMMON OPENING MOVES FOR BLACK:
-- Pawn moves: e5, e6, d5, d6, c5, c6 (if pawns can actually move there)
-- Knight moves: Nf6, Nc6, Ne7, Nh6 (if knights can actually move there)
-- DO NOT suggest bishop moves in starting position - they are blocked by pawns
-
-IMPORTANT REMINDERS:
-- In starting position, bishops CANNOT move (blocked by pawns)
-- In starting position, rooks CANNOT move (blocked by pawns)
-- Only knights and pawns can move from starting position
-- Check the FEN carefully - pieces may not be in starting positions
-
-RESPONSE STRUCTURE:
-[Brief analysis of CURRENT position based on FEN]
-[Consider ONLY legal moves available NOW]
-[YOUR MOVE HERE - just the move notation on its own line]
-
-Remember: You MUST end with a valid move for Black pieces from the CURRENT position shown in the FEN!`;
-    }
-
-    buildUserPrompt(gameState, moveHistory, previousAttempt = null) {
-        const fen = gameState.getBoardAsFEN();
-        
-        // Build detailed move history - show more moves for better context
-        let moveHistoryText = '';
-        if (moveHistory.length > 0) {
-            // Show all moves instead of just last 8 for better context
-            moveHistoryText = moveHistory.map((move, index) => {
-                const moveNumber = Math.floor(index / 2) + 1;
-                const isWhiteMove = index % 2 === 0;
-                
-                if (isWhiteMove) {
-                    return `${moveNumber}. ${move.notation}`;
-                } else {
-                    return `${move.notation}`;
-                }
-            }).join(' ');
-        }
-
-        // Also provide a more readable format
-        let moveSequence = '';
-        if (moveHistory.length > 0) {
-            moveSequence = '\nMOVE SEQUENCE:\n';
-            for (let i = 0; i < moveHistory.length; i += 2) {
-                const moveNumber = Math.floor(i / 2) + 1;
-                const whiteMove = moveHistory[i]?.notation || '';
-                const blackMove = moveHistory[i + 1]?.notation || '';
-                
-                if (blackMove) {
-                    moveSequence += `${moveNumber}. ${whiteMove} ${blackMove}\n`;
-                } else if (whiteMove) {
-                    moveSequence += `${moveNumber}. ${whiteMove}\n`;
-                }
-            }
-        }
-
-        // Get all legal moves for Black
-        const legalMoves = this.getLegalMovesForColor(gameState, 'black');
-        
-        // Describe what pieces are actually on the board for Black
-        let blackPieceDescription = '';
-        const board = gameState.board;
-        const blackPieces = [];
-        
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const piece = board[rank][file];
-                if (piece && piece.color === 'black') {
-                    const square = gameState.squareToString(file, rank);
-                    const pieceType = piece.type === 'knight' ? 'N' : 
-                                    piece.type === 'bishop' ? 'B' :
-                                    piece.type === 'rook' ? 'R' :
-                                    piece.type === 'queen' ? 'Q' :
-                                    piece.type === 'king' ? 'K' : '';
-                    
-                    if (piece.type !== 'pawn') {
-                        blackPieces.push(`${pieceType}${square}`);
-                    }
-                }
-            }
-        }
-        blackPieceDescription = blackPieces.join(', ') || 'Only pawns in starting positions';
-
-        // Also describe what White pieces are visible for context
-        let whitePieceDescription = '';
-        const whitePieces = [];
-        
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const piece = board[rank][file];
-                if (piece && piece.color === 'white') {
-                    const square = gameState.squareToString(file, rank);
-                    const pieceType = piece.type === 'knight' ? 'N' : 
-                                    piece.type === 'bishop' ? 'B' :
-                                    piece.type === 'rook' ? 'R' :
-                                    piece.type === 'queen' ? 'Q' :
-                                    piece.type === 'king' ? 'K' : '';
-                    
-                    if (piece.type !== 'pawn') {
-                        whitePieces.push(`${pieceType}${square}`);
-                    }
-                }
-            }
-        }
-        whitePieceDescription = whitePieces.join(', ') || 'Only pawns in starting positions';
-
-        let prompt = `CURRENT POSITION (FEN): ${fen}
-
-MOVE HISTORY (PGN format): ${moveHistoryText || 'Game just started'}${moveSequence}
-
-CURRENT MOVE NUMBER: ${Math.ceil((moveHistory.length + 1) / 2)} (${moveHistory.length % 2 === 0 ? 'Black to move' : 'Black responding to White'})
-
-YOUR BLACK PIECES CURRENTLY ON BOARD: ${blackPieceDescription}
-WHITE PIECES CURRENTLY ON BOARD: ${whitePieceDescription}
-
-LEGAL MOVES AVAILABLE TO YOU RIGHT NOW: ${legalMoves.join(', ')}
-
-IMPORTANT: Analyze the FEN notation above to see the EXACT current position. Do not assume where pieces should be - look at where they actually are.`;
-
-        // Enhanced feedback from previous invalid attempt
-        if (previousAttempt) {
-            prompt += `
-
-⚠️ MOVE CORRECTION REQUIRED - ATTEMPT ${previousAttempt.attemptNumber || 1}
-
-INVALID MOVE: "${previousAttempt.move}"
-
-DETAILED ANALYSIS OF WHY THIS MOVE FAILED:
-${previousAttempt.reason}
-
-POSITION CONTEXT:
-- Current FEN: ${previousAttempt.currentPosition || fen}
-- Available legal moves: ${(previousAttempt.availableMoves || legalMoves).slice(0, 10).join(', ')}${(previousAttempt.availableMoves || legalMoves).length > 10 ? '...' : ''}
-
-PIECE POSITIONS:
-${previousAttempt.piecePositions ? Object.entries(previousAttempt.piecePositions).map(([type, positions]) => `- ${type}: ${positions.join(', ')}`).join('\n') : 'See above'}
-
-CRITICAL INSTRUCTIONS FOR RETRY:
-1. READ the detailed error analysis above carefully
-2. CHOOSE from the available legal moves list ONLY
-3. DO NOT repeat the same invalid move
-4. CONSIDER the recommended moves from the analysis
-5. VERIFY your chosen move appears in the legal moves list
-
-Please analyze the error, understand why your previous move was invalid, and choose a different LEGAL move from the available options.`;
-        }
-
-        prompt += `
-
-It's your turn to move as BLACK. Choose a legal move from the current position.`;
-
-        return prompt;
-    }
-
-    getLegalMovesForColor(gameState, color) {
-        const legalMoves = [];
-        
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const piece = gameState.board[rank][file];
-                if (piece && piece.color === color) {
-                    const square = gameState.squareToString(file, rank);
-                    const moves = gameState.getValidMoves(square);
-                    moves.forEach(move => {
-                        const notation = gameState.generateMoveNotation(square, move, piece, gameState.getPiece(move));
-                        legalMoves.push(notation);
-                    });
-                }
-            }
-        }
-        
-        return legalMoves.sort(); // Sort for better readability
-    }
-
-    async getHint(gameState, moveHistory, playerColor) {
-        try {
-            const systemPrompt = `You are a chess coach providing helpful hints to a ${playerColor} player. 
-Analyze the position and suggest a good move with a brief explanation (1-2 sentences).
-Format: "Move: [move] - [brief explanation]"`;
-
-            const userPrompt = this.buildUserPrompt(gameState, moveHistory);
-
-            if (this.provider === 'openai') {
-                if (!this.openaiApiKey) {
-                    throw new Error('OpenAI API key is required');
-                }
-
-                const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.openaiApiKey}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: this.openaiModel,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: userPrompt }
-                        ],
-                        temperature: 0.5,
-                        max_tokens: 100,
-                        stream: false
-                    })
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(`OpenAI API Error: ${errorData.error?.message || response.statusText}`);
-                }
-
-                const data = await response.json();
-                return data.choices[0].message.content.trim();
-            } else {
-                const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: this.model,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: userPrompt }
-                        ],
-                        temperature: 0.5,
-                        max_tokens: 100,
-                        stream: false
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                return data.choices[0].message.content.trim();
-            }
-        } catch (error) {
-            console.error('Error getting hint from LLM:', error);
-            throw error;
-        }
-    }
-
-    setEndpoint(endpoint) {
-        this.endpoint = endpoint;
-        this.isConnected = false;
-    }
-
-    setModel(model) {
-        this.model = model;
-    }
-
-    setTemperature(temperature) {
-        this.temperature = Math.max(0, Math.min(1, temperature));
-    }
-
-    getStatus() {
-        return {
-            connected: this.isConnected,
-            provider: this.provider,
-            endpoint: this.provider === 'openai' ? this.openaiEndpoint : this.endpoint,
-            model: this.provider === 'openai' ? this.openaiModel : this.model,
-            temperature: this.temperature,
-            lastError: this.lastError,
-            hasApiKey: this.provider === 'openai' ? !!this.openaiApiKey : true
-        };
-    }
-
-    setThinkingCallback(callback) {
-        this.onThinkingUpdate = callback;
-    }
-
-    async analyzeCheckPosition(gameState, moveHistory, playerInCheck) {
-        try {
-            const systemPrompt = `You are a chess grandmaster analyzing a position where ${playerInCheck} is in check.
-
-Your task is to determine if this is CHECKMATE or just CHECK.
-
-CHECKMATE occurs when ALL THREE conditions are met:
-1. The king is in check
-2. The king CANNOT move to any safe square
-3. NO piece can block the check OR capture the attacking piece
-
-CHECK occurs when:
-1. The king is in check 
-2. BUT there is at least ONE legal move that gets the king out of check
-
-To escape check, you can:
-1. MOVE THE KING to a safe square (not attacked by opponent pieces)
-2. BLOCK the check by moving a piece between the king and attacker
-3. CAPTURE the piece that is giving check
-
-CRITICAL: Even if the king cannot move, it's NOT checkmate if ANY other piece can block or capture to save the king.
-
-You must check EVERY possible move for the player in check. If even ONE move exists that gets out of check, it's CHECK, not CHECKMATE.
-
-Analyze thoroughly and respond with either:
-- "CHECKMATE" only if there are absolutely zero legal moves
-- "CHECK" if there are any legal moves available
-
-End your response with just the word CHECKMATE or CHECK on its own line.`;
-
-            // Add timeout protection to prevent hanging
-            let response;
-            const timeoutMs = 8000;
-            
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Check analysis timed out')), timeoutMs);
-            });
-            
-            try {
-                if (this.provider === 'openai') {
-                    response = await Promise.race([
-                        this.getOpenAIResponse(systemPrompt, this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck)),
-                        timeoutPromise
-                    ]);
-                } else {
-                    response = await Promise.race([
-                        this.getLMStudioResponse(systemPrompt, this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck)),
-                        timeoutPromise
-                    ]);
-                }
-            } catch (error) {
-                console.error('Error or timeout in LLM check analysis:', error);
-                
-                // Fall back to engine's own assessment if LLM fails
-                const isActualCheckmate = gameState.isActualCheckmate(playerInCheck);
-                console.log('Falling back to engine checkmate assessment:', isActualCheckmate);
-                return isActualCheckmate ? 'checkmate' : 'check';
-            }
-            
-            // Parse the response
-            const lines = response.split('\n').map(line => line.trim()).filter(line => line);
-            const lastLine = lines[lines.length - 1].toUpperCase();
-            
-            console.log('LLM checkmate analysis response:', response);
-            console.log('Final decision:', lastLine);
-            
-            if (lastLine === 'CHECKMATE') {
-                // Double-check with engine logic as a safety net
-                const engineCheckmate = gameState.isActualCheckmate(playerInCheck);
-                console.log('Engine checkmate verification:', engineCheckmate);
-                
-                if (!engineCheckmate) {
-                    console.warn('LLM said checkmate but engine says no - defaulting to check');
-                    return 'check';
-                }
-                return 'checkmate';
-            } else if (lastLine === 'CHECK') {
-                return 'check';
-            } else {
-                // Fallback: if response is unclear, use engine assessment
-                const engineAssessment = gameState.isActualCheckmate(playerInCheck) ? 'checkmate' : 'check';
-                console.warn('LLM analysis unclear, using engine assessment:', engineAssessment);
-                return engineAssessment;
-            }
-
-        } catch (error) {
-            console.error('Error analyzing check position:', error);
-            // Fallback to engine assessment if analysis fails
-            const isActualCheckmate = gameState.isActualCheckmate(playerInCheck);
-            return isActualCheckmate ? 'checkmate' : 'check';
-        }
-    }
-
-    buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck) {
-        const fen = gameState.getBoardAsFEN();
-        const opponentColor = playerInCheck === 'white' ? 'black' : 'white';
-        
-        // Get all legal moves for the player in check
-        const legalMoves = this.getLegalMovesForColor(gameState, playerInCheck);
-        
-        // Get king position and what's attacking it
-        const kingSquare = gameState.findKing(playerInCheck);
-        const attackingPieces = this.findAttackingPieces(gameState, kingSquare, opponentColor);
-        
-        let moveHistoryText = '';
-        if (moveHistory.length > 0) {
-            const recentMoves = moveHistory.slice(-6);
-            moveHistoryText = recentMoves.map((move, index) => {
-                const fullMoveIndex = moveHistory.length - recentMoves.length + index;
-                const moveNumber = Math.floor(fullMoveIndex / 2) + 1;
-                const isWhiteMove = fullMoveIndex % 2 === 0;
-                
-                if (isWhiteMove) {
-                    return `${moveNumber}. ${move.notation}`;
-                } else {
-                    return `${move.notation}`;
-                }
-            }).join(' ');
-        }
-
-        return `POSITION TO ANALYZE (FEN): ${fen}
-
-RECENT MOVES: ${moveHistoryText || 'Game start'}
-
-CURRENT SITUATION:
-- ${playerInCheck.toUpperCase()} KING on ${kingSquare} is in CHECK
-- Attacking pieces: ${attackingPieces.join(', ')}
-- ${playerInCheck.toUpperCase()} has ${legalMoves.length} legal moves available
-
-ALL LEGAL MOVES FOR ${playerInCheck.toUpperCase()}: ${legalMoves.length > 0 ? legalMoves.join(', ') : 'NONE'}
-
-ANALYSIS REQUIRED:
-1. Can the KING move to any safe square? Check each king move carefully.
-2. Can ANY piece CAPTURE the attacking piece(s)?
-3. Can ANY piece BLOCK the check by moving between king and attacker?
-
-REMEMBER: If even ONE legal move exists that gets out of check, it's CHECK, not CHECKMATE.
-
-Important: The legal moves listed above are already filtered - they all get the king out of check. If any moves are listed, it's CHECK, not CHECKMATE.`;
-    }
-
-    findAttackingPieces(gameState, kingSquare, attackingColor) {
-        const attackers = [];
-        
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const piece = gameState.board[rank][file];
-                if (piece && piece.color === attackingColor) {
-                    const square = gameState.squareToString(file, rank);
-                    const moves = gameState.generatePieceMoves(square, piece, false);
-                    if (moves.includes(kingSquare)) {
-                        const pieceType = piece.type === 'knight' ? 'N' : 
-                                        piece.type === 'bishop' ? 'B' :
-                                        piece.type === 'rook' ? 'R' :
-                                        piece.type === 'queen' ? 'Q' :
-                                        piece.type === 'king' ? 'K' : 'P';
-                        attackers.push(`${pieceType}${square}`);
-                    }
-                }
-            }
-        }
-        
-        return attackers;
-    }
-
-    // Add parseChessMove as an instance method, not just as a function
-    parseChessMove(moveText) {
-        console.log('Parsing move text:', moveText);
-        
-        // Normalize line endings and trim whitespace
-        const text = moveText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
-        
-        // Split by lines and filter out empty lines
-        const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-        
-        // Look for move patterns in the last few lines
-        const movePatterns = [
-            /^([a-h][1-8])$/,                    // Simple pawn moves: e4, d5
-            /^([KQRBN][a-h][1-8])$/,            // Piece moves: Nf3, Bb5
-            /^([a-h]x[a-h][1-8])$/,             // Pawn captures: exd5
-            /^([KQRBN]x[a-h][1-8])$/,           // Piece captures: Nxe4
-            /^(O-O-O|O-O)$/,                    // Castling
-            /^([a-h][18]=[QRBN])$/,             // Promotion: e8=Q
-            /^([KQRBN][a-h]\d?[a-h][1-8])$/,    // Disambiguated moves: Nbd2
-            /\b([a-h][1-8])\b/,                 // Any square notation
-            /\b([KQRBN][a-h][1-8])\b/,          // Any piece move
-            /\b(O-O-O|O-O)\b/                   // Castling anywhere in text
-        ];
-        
-        // Check lines from end to beginning for move patterns
-        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
-            const line = lines[i];
-            
-            for (const pattern of movePatterns) {
-                const match = line.match(pattern);
-                if (match) {
-                    let move = match[1] || match[0];
-                    
-                    // Clean up move notation
-                    move = move.replace(/[+#!?]$/, ''); // Remove check/checkmate/annotation symbols
-                    move = move.replace(/^\d+\.\s*\.{3}\s*/, ''); // Remove "1. ... " notation
-                    move = move.replace(/^\d+\.\s*/, ''); // Remove move numbers
-                    
-                    console.log('Found move:', move);
-                    return move;
-                }
-            }
-        }
-        
-        // If no clear move pattern found, try to extract from the last line
-        const lastLine = lines[lines.length - 1];
-        
-        // Remove common prefixes and suffixes
-        let cleanedLine = lastLine
-            .replace(/^(Selected move|Move|Final move|I play|My move):\s*/i, '')
-            .replace(/^\d+\.\s*\.{3}\s*/, '')
-            .replace(/^\d+\.\s*/, '')
-            .replace(/[+#!?]*$/, '')
-            .trim();
-        
-        // If it looks like a move, return it
-        if (/^[a-h][1-8]$|^[KQRBN][a-h][1-8]$|^O-O|^[a-h]x[a-h][1-8]$/.test(cleanedLine)) {
-            console.log('Extracted move from last line:', cleanedLine);
-            return cleanedLine;
-        }
-        
-        console.log('Could not parse move from text, returning last line:', lastLine);
-        return lastLine;
-    }
-
     async getOpenAIResponse(systemPrompt, userPrompt) {
-        if (!this.openaiApiKey) {
-            throw new Error('OpenAI API key is required');
-        }
-
         const response = await fetch(`${this.openaiEndpoint}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -878,9 +142,8 @@ Important: The legal moves listed above are already filtered - they all get the 
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt }
                 ],
-                temperature: 0.1, // Low temperature for accurate analysis
-                max_tokens: 500,
-                stream: false
+                temperature: this.temperature,
+                max_tokens: 1000
             })
         });
 
@@ -890,7 +153,7 @@ Important: The legal moves listed above are already filtered - they all get the 
         }
 
         const data = await response.json();
-        return data.choices[0].message.content.trim();
+        return data.choices[0].message.content;
     }
 
     async getLMStudioResponse(systemPrompt, userPrompt) {
@@ -905,18 +168,462 @@ Important: The legal moves listed above are already filtered - they all get the 
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt }
                 ],
-                temperature: 0.1, // Low temperature for accurate analysis
-                max_tokens: 500,
+                temperature: this.temperature,
+                max_tokens: 1000,
                 stream: false
             })
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(`LM Studio Error: HTTP ${response.status} - ${response.statusText}`);
         }
 
         const data = await response.json();
-        return data.choices[0].message.content.trim();
+        return data.choices[0].message.content;
+    }
+
+    buildSystemPrompt() {
+        return LLMPrompts.getMoveGenerationPrompt();
+    }
+
+    buildUserPrompt(gameState, moveHistory, previousAttempt = null) {
+        const fen = gameState.getBoardAsFEN();
+        
+        // Get move history in readable format
+        let moveHistoryText = '';
+        if (moveHistory.length > 0) {
+            const recentMoves = moveHistory.slice(-10);
+            moveHistoryText = recentMoves.map((move, index) => {
+                const fullIndex = moveHistory.length - recentMoves.length + index;
+                const moveNumber = Math.floor(fullIndex / 2) + 1;
+                const isWhiteMove = fullIndex % 2 === 0;
+                
+                if (isWhiteMove) {
+                    return `${moveNumber}.${move.notation}`;
+                } else {
+                    return `${move.notation}`;
+                }
+            }).join(' ');
+        }
+
+        // Enhanced position analysis
+        const positionAnalysis = this.getEnhancedPositionAnalysis(gameState, moveHistory);
+        
+        // Get legal moves for Black
+        const legalMoves = this.getLegalMovesForColor(gameState, 'black');
+        
+        let prompt = `CURRENT POSITION (FEN): ${fen}
+
+RECENT MOVES: ${moveHistoryText || 'Game start - Opening phase'}
+
+${positionAnalysis}
+
+YOUR LEGAL MOVES (${legalMoves.length} options): ${legalMoves.slice(0, 25).join(', ')}${legalMoves.length > 25 ? '...' : ''}
+
+GAME PHASE: ${this.getGamePhase(moveHistory)}
+
+CRITICAL ANALYSIS REQUIRED:
+1. What did White just threaten with their last move?
+2. Are any of your pieces under attack or hanging?
+3. What tactical opportunities exist in this position?
+4. What is your best plan for improvement?`;
+
+        // Add specific opening guidance
+        if (moveHistory.length < 20) {
+            prompt += `\n\nOPENING PRIORITIES:
+- Develop pieces toward center squares
+- Control central squares (e5, d5, e6, d6)
+- Castle early for king safety
+- Don't move the same piece twice without reason
+- Respond to opponent's central control`;
+        }
+
+        // Add error feedback if this is a retry
+        if (previousAttempt) {
+            prompt += `\n\n⚠️ PREVIOUS ATTEMPT FAILED:
+You tried: "${previousAttempt.move}"
+Error: ${previousAttempt.reason}
+
+IMPORTANT: Choose a LEGAL move from your available options listed above.
+Consider: ${this.suggestBetterMoves(previousAttempt, legalMoves)}`;
+        }
+
+        return prompt;
+    }
+
+    parseAndUpdateThinking(response) {
+        if (!this.onThinkingUpdate) return;
+
+        // Extract thinking steps from response
+        const steps = [];
+        const lines = response.split('\n');
+        let currentStep = '';
+        let stepType = 'analysis';
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            if (trimmed.toLowerCase().includes('white just played') || 
+                trimmed.toLowerCase().includes('let me check for threats')) {
+                if (currentStep) {
+                    steps.push({ type: stepType, content: currentStep.trim() });
+                }
+                currentStep = trimmed;
+                stepType = 'analysis';
+            } else if (trimmed.toLowerCase().includes('candidate moves') || 
+                      trimmed.toLowerCase().includes('looking at')) {
+                if (currentStep) {
+                    steps.push({ type: stepType, content: currentStep.trim() });
+                }
+                currentStep = trimmed;
+                stepType = 'evaluation';
+            } else if (trimmed.toLowerCase().includes('my move:') || 
+                      trimmed.toLowerCase().includes('i choose')) {
+                if (currentStep) {
+                    steps.push({ type: stepType, content: currentStep.trim() });
+                }
+                currentStep = trimmed;
+                stepType = 'final';
+            } else if (trimmed) {
+                currentStep += '\n' + trimmed;
+            }
+        }
+
+        // Add final step
+        if (currentStep) {
+            steps.push({ type: stepType, content: currentStep.trim() });
+        }
+
+        this.onThinkingUpdate(steps);
+    }
+
+    parseChessMove(response) {
+        // Enhanced move parsing with multiple patterns
+        const movePatterns = [
+            /My move:\s*([a-h][1-8]|[NBRQK][a-h][1-8]|[NBRQK]x[a-h][1-8]|[a-h]x[a-h][1-8]|O-O-O|O-O)/i,
+            /I (?:choose|play|move):\s*([a-h][1-8]|[NBRQK][a-h][1-8]|[NBRQK]x[a-h][1-8]|[a-h]x[a-h][1-8]|O-O-O|O-O)/i,
+            /Move:\s*([a-h][1-8]|[NBRQK][a-h][1-8]|[NBRQK]x[a-h][1-8]|[a-h]x[a-h][1-8]|O-O-O|O-O)/i,
+            /\b([a-h][1-8]|[NBRQK][a-h][1-8]|[NBRQK]x[a-h][1-8]|[a-h]x[a-h][1-8]|O-O-O|O-O)\b/g
+        ];
+
+        for (const pattern of movePatterns) {
+            const match = response.match(pattern);
+            if (match) {
+                if (pattern.global) {
+                    // For global patterns, take the last match (likely the final decision)
+                    return match[match.length - 1];
+                } else {
+                    return match[1];
+                }
+            }
+        }
+
+        throw new Error('Could not parse move from LLM response');
+    }
+
+    getLegalMovesForColor(gameState, color) {
+        const legalMoves = [];
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = gameState.board[rank][file];
+                if (piece && piece.color === color) {
+                    const square = gameState.squareToString(file, rank);
+                    const moves = gameState.getValidMovesForSquare(square);
+                    moves.forEach(move => {
+                        const notation = gameState.generateMoveNotation(square, move, piece, gameState.getPiece(move));
+                        legalMoves.push(notation);
+                    });
+                }
+            }
+        }
+        
+        return legalMoves.sort();
+    }
+
+    getEnhancedPositionAnalysis(gameState, moveHistory) {
+        const threats = this.findImmediateThreats(gameState);
+        const kingSafety = this.getKingSafetyAnalysis(gameState);
+        const lastMove = moveHistory.length > 0 ? moveHistory[moveHistory.length - 1] : null;
+        
+        let analysis = `POSITION ANALYSIS:
+- Material: ${this.getMaterialSummary(gameState)}
+- King Safety: ${kingSafety}`;
+
+        if (lastMove) {
+            analysis += `\n- White's Last Move: ${lastMove.notation} (${this.analyzeMoveIntent(lastMove, gameState)})`;
+        }
+
+        if (threats.length > 0) {
+            analysis += `\n- ⚠️  IMMEDIATE THREATS: ${threats.join(', ')}`;
+        }
+
+        const pieceActivity = this.analyzePieceActivity(gameState);
+        if (pieceActivity) {
+            analysis += `\n- Piece Activity: ${pieceActivity}`;
+        }
+
+        return analysis;
+    }
+
+    getMaterialSummary(gameState) {
+        const material = this.getMaterialCount(gameState);
+        const whiteMaterial = material.white.total;
+        const blackMaterial = material.black.total;
+        
+        if (whiteMaterial === blackMaterial) {
+            return 'Equal material';
+        } else if (blackMaterial > whiteMaterial) {
+            return `Black ahead by ${blackMaterial - whiteMaterial} points`;
+        } else {
+            return `White ahead by ${whiteMaterial - blackMaterial} points`;
+        }
+    }
+
+    getMaterialCount(gameState) {
+        const pieceValues = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9 };
+        const material = {
+            white: { pawn: 0, knight: 0, bishop: 0, rook: 0, queen: 0, total: 0 },
+            black: { pawn: 0, knight: 0, bishop: 0, rook: 0, queen: 0, total: 0 }
+        };
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = gameState.board[rank][file];
+                if (piece && piece.type !== 'king') {
+                    material[piece.color][piece.type]++;
+                    material[piece.color].total += pieceValues[piece.type];
+                }
+            }
+        }
+        
+        return material;
+    }
+
+    findImmediateThreats(gameState) {
+        const threats = [];
+        
+        // Check if Black king is in check
+        if (gameState.isKingInCheck('black')) {
+            threats.push('King in check!');
+        }
+        
+        // Check for hanging pieces
+        const hangingPieces = this.findHangingPieces(gameState, 'black');
+        if (hangingPieces.length > 0) {
+            threats.push(`Hanging pieces: ${hangingPieces.join(', ')}`);
+        }
+        
+        return threats;
+    }
+
+    findHangingPieces(gameState, color) {
+        const hanging = [];
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = gameState.board[rank][file];
+                if (piece && piece.color === color) {
+                    const square = gameState.squareToString(file, rank);
+                    
+                    const opponentColor = color === 'white' ? 'black' : 'white';
+                    if (gameState.isSquareAttacked(square, opponentColor)) {
+                        const defended = gameState.isSquareAttacked(square, color);
+                        if (!defended || this.isNetLoss(piece, square, gameState)) {
+                            hanging.push(`${piece.type}${square}`);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return hanging;
+    }
+
+    isNetLoss(piece, square, gameState) {
+        const pieceValues = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9, king: 0 };
+        const pieceValue = pieceValues[piece.type];
+        
+        const opponentColor = piece.color === 'white' ? 'black' : 'white';
+        let lowestAttacker = 10;
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const attacker = gameState.board[rank][file];
+                if (attacker && attacker.color === opponentColor) {
+                    const attackerSquare = gameState.squareToString(file, rank);
+                    const moves = gameState.generatePieceMoves(attackerSquare, attacker, false);
+                    if (moves.includes(square)) {
+                        const attackerValue = pieceValues[attacker.type];
+                        lowestAttacker = Math.min(lowestAttacker, attackerValue);
+                    }
+                }
+            }
+        }
+        
+        return pieceValue > lowestAttacker;
+    }
+
+    getKingSafetyAnalysis(gameState) {
+        const whiteInCheck = gameState.isKingInCheck('white');
+        const blackInCheck = gameState.isKingInCheck('black');
+        
+        if (blackInCheck) return 'Black king in check - URGENT!';
+        if (whiteInCheck) return 'White king in check - opportunity!';
+        
+        const blackKing = gameState.findKing('black');
+        const whiteKing = gameState.findKing('white');
+        
+        let safety = '';
+        
+        if (blackKing === 'g8' || blackKing === 'c8') {
+            safety += 'Black castled (safe)';
+        } else if (blackKing === 'e8') {
+            safety += 'Black king uncastled (risky)';
+        } else {
+            safety += 'Black king active';
+        }
+        
+        if (whiteKing === 'g1' || whiteKing === 'c1') {
+            safety += ', White castled';
+        } else if (whiteKing === 'e1') {
+            safety += ', White uncastled';
+        } else {
+            safety += ', White king active';
+        }
+        
+        return safety;
+    }
+
+    analyzeMoveIntent(move, gameState) {
+        const piece = move.piece;
+        const to = move.to;
+        
+        if (move.captured) {
+            return `Captured ${move.captured.type}`;
+        }
+        
+        if (move.castling) {
+            return 'Castled for king safety';
+        }
+        
+        if (piece.type === 'pawn') {
+            if (to.includes('4') || to.includes('5')) {
+                return 'Central pawn advance';
+            }
+            return 'Pawn development';
+        }
+        
+        if (['knight', 'bishop'].includes(piece.type)) {
+            return 'Piece development';
+        }
+        
+        if (piece.type === 'queen') {
+            return 'Queen activity - check for threats';
+        }
+        
+        return 'Positional improvement';
+    }
+
+    analyzePieceActivity(gameState) {
+        const blackPieces = this.countActivePieces(gameState, 'black');
+        const whitePieces = this.countActivePieces(gameState, 'white');
+        
+        if (blackPieces > whitePieces + 1) {
+            return 'Black more active';
+        } else if (whitePieces > blackPieces + 1) {
+            return 'White more active - improve piece coordination';
+        }
+        
+        return 'Balanced piece activity';
+    }
+
+    countActivePieces(gameState, color) {
+        let activeCount = 0;
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = gameState.board[rank][file];
+                if (piece && piece.color === color && piece.type !== 'pawn' && piece.type !== 'king') {
+                    const square = gameState.squareToString(file, rank);
+                    const moves = gameState.getValidMovesForSquare(square);
+                    if (moves.length > 2) {
+                        activeCount++;
+                    }
+                }
+            }
+        }
+        
+        return activeCount;
+    }
+
+    getGamePhase(moveHistory) {
+        const moveCount = moveHistory.length;
+        
+        if (moveCount < 16) {
+            return 'Opening - Focus on development and king safety';
+        } else if (moveCount < 40) {
+            return 'Middlegame - Look for tactics and improve positions';
+        } else {
+            return 'Endgame - Activate king, push pawns, precise calculation';
+        }
+    }
+
+    suggestBetterMoves(previousAttempt, legalMoves) {
+        const suggestions = [];
+        
+        if (/^[KQRBN]/.test(previousAttempt.move)) {
+            const pieceType = previousAttempt.move[0];
+            const samePiece = legalMoves.filter(move => move.startsWith(pieceType));
+            if (samePiece.length > 0) {
+                suggestions.push(`Legal ${pieceType} moves: ${samePiece.slice(0, 3).join(', ')}`);
+            }
+        }
+        
+        const developingMoves = legalMoves.filter(move => 
+            ['Nf6', 'Nc6', 'e6', 'e5', 'd6', 'd5', 'Be7', 'Bd7', 'O-O'].includes(move)
+        );
+        
+        if (developingMoves.length > 0) {
+            suggestions.push(`Good developing moves: ${developingMoves.join(', ')}`);
+        }
+        
+        return suggestions.join(' | ') || 'Try any of the legal moves listed above';
+    }
+
+    async getHint(gameState, moveHistory, playerColor) {
+        const systemPrompt = LLMPrompts.getHintPrompt(playerColor);
+        const userPrompt = this.buildUserPrompt(gameState, moveHistory);
+
+        try {
+            let response;
+            if (this.provider === 'openai') {
+                response = await this.getOpenAIResponse(systemPrompt, userPrompt);
+            } else {
+                response = await this.getLMStudioResponse(systemPrompt, userPrompt);
+            }
+            
+            return response;
+        } catch (error) {
+            throw new Error('Could not get hint: ' + error.message);
+        }
+    }
+
+    // Add method for getting random move (used in recovery)
+    getRandomMove(gameState) {
+        const legalMoves = this.getLegalMovesForColor(gameState, 'black');
+        if (legalMoves.length === 0) return null;
+        
+        // Prefer developing moves in opening
+        if (gameState.moveHistory.length < 16) {
+            const developingMoves = legalMoves.filter(move => 
+                ['Nf6', 'Nc6', 'e5', 'd5', 'e6', 'd6', 'Be7', 'Bd7'].includes(move)
+            );
+            if (developingMoves.length > 0) {
+                return developingMoves[Math.floor(Math.random() * developingMoves.length)];
+            }
+        }
+        
+        return legalMoves[Math.floor(Math.random() * legalMoves.length)];
     }
 }
-

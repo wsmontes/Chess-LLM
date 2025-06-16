@@ -477,7 +477,7 @@ class ChessEngine {
         this.gameState = 'checkmate';
     }
 
-    // Add method to check if position is actually checkmate (for LLM analysis)
+    // Enhanced method to check if position is actually checkmate
     isActualCheckmate(color) {
         // First check if the king is in check
         const inCheck = this.isKingInCheck(color);
@@ -486,7 +486,7 @@ class ChessEngine {
         }
         
         // Then check if there are any valid moves to get out of check
-        // Look for ANY valid move for this color
+        // This includes king moves, blocking moves, and capturing the attacker
         for (let rank = 0; rank < 8; rank++) {
             for (let file = 0; file < 8; file++) {
                 const piece = this.board[rank][file];
@@ -494,14 +494,13 @@ class ChessEngine {
                     const square = this.squareToString(file, rank);
                     const validMoves = this.getValidMovesForSquare(square);
                     if (validMoves.length > 0) {
-                        console.log(`Found valid move for ${color}: ${square} to ${validMoves[0]}`);
+                        console.log(`Found escape move for ${color}: ${square} to ${validMoves[0]}`);
                         return false;  // Not checkmate if ANY piece has a valid move
                     }
                 }
             }
         }
         
-        // If we get here, it's checkmate (king in check + no valid moves)
         console.log(`Confirmed checkmate for ${color}`);
         return true;
     }
@@ -527,6 +526,7 @@ class ChessEngine {
         return legalMoves.sort();
     }
 
+    // Consolidate hasValidMoves methods
     hasValidMovesForPlayer(color) {
         // Check if the player has any legal moves that don't leave their king in check
         for (let rank = 0; rank < 8; rank++) {
@@ -784,5 +784,191 @@ class ChessEngine {
         };
         this.halfmoveClock = 0;
         this.fullmoveNumber = 1;
+    }
+
+    // Enhanced position evaluation for better AI understanding
+    getPositionEvaluation() {
+        const evaluation = {
+            material: this.getMaterialBalance(),
+            kingSafety: this.getKingSafetyScore(),
+            pieceActivity: this.getPieceActivityScore(),
+            pawnStructure: this.getPawnStructureScore(),
+            centerControl: this.getCenterControlScore()
+        };
+        
+        return evaluation;
+    }
+
+    getMaterialBalance() {
+        const pieceValues = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9 };
+        let whiteTotal = 0, blackTotal = 0;
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.board[rank][file];
+                if (piece && piece.type !== 'king') {
+                    const value = pieceValues[piece.type] || 0;
+                    if (piece.color === 'white') {
+                        whiteTotal += value;
+                    } else {
+                        blackTotal += value;
+                    }
+                }
+            }
+        }
+        
+        return { white: whiteTotal, black: blackTotal, difference: blackTotal - whiteTotal };
+    }
+
+    getKingSafetyScore() {
+        const whiteKingSafety = this.evaluateKingSafety('white');
+        const blackKingSafety = this.evaluateKingSafety('black');
+        
+        return {
+            white: whiteKingSafety,
+            black: blackKingSafety,
+            advantage: blackKingSafety - whiteKingSafety
+        };
+    }
+
+    evaluateKingSafety(color) {
+        const kingSquare = this.findKing(color);
+        if (!kingSquare) return -100; // King missing is very bad
+        
+        const [kingFile, kingRank] = this.parseSquare(kingSquare);
+        let safety = 0;
+        
+        // Bonus for castled king
+        const expectedRank = color === 'white' ? 0 : 7;
+        if (kingRank === expectedRank) {
+            if (kingFile === 6 || kingFile === 2) { // Castled position
+                safety += 20;
+            }
+        }
+        
+        // Penalty for exposed king
+        const opponentColor = color === 'white' ? 'black' : 'white';
+        const attackedSquares = this.getSquaresAroundKing(kingSquare);
+        let attackedCount = 0;
+        
+        for (const square of attackedSquares) {
+            if (this.isSquareAttacked(square, opponentColor)) {
+                attackedCount++;
+            }
+        }
+        
+        safety -= attackedCount * 5; // Penalty for attacked squares around king
+        
+        // Check for pawn shield
+        const pawnShield = this.evaluatePawnShield(kingSquare, color);
+        safety += pawnShield;
+        
+        return safety;
+    }
+
+    getSquaresAroundKing(kingSquare) {
+        const [kingFile, kingRank] = this.parseSquare(kingSquare);
+        const squares = [];
+        
+        for (let df = -1; df <= 1; df++) {
+            for (let dr = -1; dr <= 1; dr++) {
+                if (df === 0 && dr === 0) continue; // Skip king's own square
+                
+                const newFile = kingFile + df;
+                const newRank = kingRank + dr;
+                
+                if (this.isValidSquare(newFile, newRank)) {
+                    squares.push(this.squareToString(newFile, newRank));
+                }
+            }
+        }
+        
+        return squares;
+    }
+
+    evaluatePawnShield(kingSquare, color) {
+        const [kingFile, kingRank] = this.parseSquare(kingSquare);
+        const direction = color === 'white' ? 1 : -1;
+        let shield = 0;
+        
+        // Check pawns in front of king
+        for (let df = -1; df <= 1; df++) {
+            const pawnFile = kingFile + df;
+            const pawnRank = kingRank + direction;
+            
+            if (this.isValidSquare(pawnFile, pawnRank)) {
+                const pawnSquare = this.squareToString(pawnFile, pawnRank);
+                const piece = this.getPiece(pawnSquare);
+                
+                if (piece && piece.type === 'pawn' && piece.color === color) {
+                    shield += 10; // Bonus for pawn shield
+                }
+            }
+        }
+        
+        return shield;
+    }
+
+    getPieceActivityScore() {
+        const whiteMobility = this.calculateMobility('white');
+        const blackMobility = this.calculateMobility('black');
+        
+        return {
+            white: whiteMobility,
+            black: blackMobility,
+            advantage: blackMobility - whiteMobility
+        };
+    }
+
+    calculateMobility(color) {
+        let totalMobility = 0;
+        
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.board[rank][file];
+                if (piece && piece.color === color && piece.type !== 'king') {
+                    const square = this.squareToString(file, rank);
+                    const moves = this.generatePieceMoves(square, piece, false);
+                    
+                    // Weight mobility by piece type
+                    const mobilityWeight = {
+                        pawn: 1, knight: 2, bishop: 2, rook: 1, queen: 0.5
+                    };
+                    
+                    totalMobility += moves.length * (mobilityWeight[piece.type] || 1);
+                }
+            }
+        }
+        
+        return totalMobility;
+    }
+
+    getCenterControlScore() {
+        const centerSquares = ['d4', 'd5', 'e4', 'e5'];
+        const extendedCenter = ['c3', 'c4', 'c5', 'c6', 'd3', 'd6', 'e3', 'e6', 'f3', 'f4', 'f5', 'f6'];
+        
+        let whiteControl = 0, blackControl = 0;
+        
+        for (const square of centerSquares) {
+            if (this.isSquareAttacked(square, 'white')) whiteControl += 2;
+            if (this.isSquareAttacked(square, 'black')) blackControl += 2;
+            
+            const piece = this.getPiece(square);
+            if (piece) {
+                if (piece.color === 'white') whiteControl += 3;
+                else blackControl += 3;
+            }
+        }
+        
+        for (const square of extendedCenter) {
+            if (this.isSquareAttacked(square, 'white')) whiteControl += 1;
+            if (this.isSquareAttacked(square, 'black')) blackControl += 1;
+        }
+        
+        return {
+            white: whiteControl,
+            black: blackControl,
+            advantage: blackControl - whiteControl
+        };
     }
 }

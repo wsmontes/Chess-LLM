@@ -8,6 +8,9 @@ class GameController {
         this.statusText = document.getElementById('status-text');
         // Access LLM through moveHandler
         this.llm = this.moveHandler.llm;
+        
+        // Pass thinking display to move handler
+        this.moveHandler.thinkingDisplay = this.thinkingDisplay;
     }
 
     async handleSquareClick(squareName) {
@@ -90,12 +93,12 @@ class GameController {
             console.error("LLM move process timed out globally");
             this.showError("LLM move timed out - checking game state");
             this.checkAndHandleGameOver();
-        }, 60000); // 60 second global timeout
+        }, 90000); // Increased timeout for deep thinking
         
         try {
             this.thinkingDisplay.showThinking(true);
             this.thinkingDisplay.addMoveThinkingHeader(this.engine);
-            this.updateStatus('LLM is thinking...');
+            this.updateStatus('LLM is engaging in deep analysis...');
             this.thinkingDisplay.showThinkingStreamIndicator(true);
 
             // Try to get a move from the LLM with timeout protection

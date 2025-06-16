@@ -600,6 +600,74 @@ body {
     background: rgba(33, 150, 243, 0.05);
 }
 
+.thinking-step.information-request {
+    border-left-color: #2196F3;
+    background: rgba(33, 150, 243, 0.05);
+}
+
+.thinking-step.information-request .thinking-step-label {
+    color: #2196F3;
+    font-weight: 600;
+}
+
+.thinking-step.information-response {
+    border-left-color: #4CAF50;
+    background: rgba(76, 175, 80, 0.05);
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+}
+
+.thinking-step.information-response .thinking-step-label {
+    color: #4CAF50;
+    font-weight: 600;
+}
+
+.thinking-step.information-response .thinking-step-content {
+    white-space: pre-line;
+    max-height: 300px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.02);
+    padding: 8px;
+    border-radius: 4px;
+    margin-top: 4px;
+    line-height: 1.3;
+}
+
+.thinking-step.information-response .thinking-step-content strong {
+    color: #2E7D32;
+    font-weight: 600;
+}
+
+.thinking-step.deep-evaluation {
+    border-left-color: #9C27B0;
+    background: rgba(156, 39, 176, 0.05);
+}
+
+.thinking-step.deep-evaluation .thinking-step-content strong {
+    color: #7B1FA2;
+    font-weight: 600;
+}
+
+/* Enhanced scrollbar for information responses */
+.thinking-step.information-response .thinking-step-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.thinking-step.information-response .thinking-step-content::-webkit-scrollbar-track {
+    background: rgba(76, 175, 80, 0.1);
+    border-radius: 2px;
+}
+
+.thinking-step.information-response .thinking-step-content::-webkit-scrollbar-thumb {
+    background: #4CAF50;
+    border-radius: 2px;
+}
+
+/* Improve readability of system data */
+.thinking-step.information-response .thinking-step-content {
+    font-family: 'SF Mono', 'Monaco', 'Consolas', 'Roboto Mono', monospace;
+}
+
 .thinking-step-label {
     font-weight: 600;
     color: var(--text-primary);
@@ -1024,4 +1092,284 @@ body {
     font-style: italic;
     padding: 40px 20px;
     font-family: inherit;
+}
+
+/* Deep Thinking Styles */
+.thinking-iteration-header {
+    margin: 20px 0 12px 0;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(33, 150, 243, 0.1));
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.thinking-iteration-separator {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-color), rgba(33, 150, 243, 0.6), transparent);
+    margin-bottom: 12px;
+}
+
+.thinking-iteration-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 600;
+    color: var(--accent-color);
+    font-size: 1rem;
+    padding: 12px 16px 8px 16px;
+}
+
+.thinking-iteration-title i {
+    font-size: 1.1rem;
+    color: #2196F3;
+}
+
+.iteration-phase {
+    margin-left: auto;
+    font-size: 0.85rem;
+    color: #2196F3;
+    background: rgba(33, 150, 243, 0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(33, 150, 243, 0.3);
+}
+
+.thinking-iteration-progress {
+    padding: 0 16px 12px 16px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(76, 175, 80, 0.2);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-color), #2196F3);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+.thinking-iteration-summary {
+    margin: 12px 0;
+    padding: 12px;
+    background: rgba(156, 39, 176, 0.05);
+    border-left: 3px solid #9C27B0;
+    border-radius: 6px;
+}
+
+.summary-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: #9C27B0;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+}
+
+.summary-content {
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.key-findings {
+    margin-bottom: 8px;
+}
+
+.findings-list {
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.candidate-moves {
+    color: var(--text-primary);
+}
+
+.moves-list {
+    margin-top: 4px;
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    color: var(--accent-color);
+}
+
+.deep-thinking-indicator {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(33, 150, 243, 0.1));
+    border-radius: 8px;
+    border: 2px solid rgba(76, 175, 80, 0.3);
+    margin: 12px 0;
+    animation: deepThinkingPulse 2s infinite ease-in-out;
+}
+
+.deep-thinking-animation {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.deep-thinking-animation i {
+    font-size: 1.5rem;
+    color: var(--accent-color);
+    z-index: 2;
+    animation: brainPulse 1.5s infinite ease-in-out;
+}
+
+.thinking-waves {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.wave {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--accent-color);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0;
+}
+
+.wave1 {
+    animation: waveExpand 2s infinite ease-out;
+    animation-delay: 0s;
+}
+
+.wave2 {
+    animation: waveExpand 2s infinite ease-out;
+    animation-delay: 0.7s;
+}
+
+.wave3 {
+    animation: waveExpand 2s infinite ease-out;
+    animation-delay: 1.4s;
+}
+
+.deep-thinking-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.main-text {
+    font-weight: 600;
+    color: var(--accent-color);
+    font-size: 1rem;
+}
+
+.phase-text {
+    font-size: 0.85rem;
+    color: #2196F3;
+    font-style: italic;
+}
+
+.thinking-step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.iteration-indicator {
+    font-size: 0.75rem;
+    background: rgba(33, 150, 243, 0.1);
+    color: #2196F3;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(33, 150, 243, 0.3);
+    font-weight: 500;
+}
+
+.thinking-step.tactical-analysis {
+    border-left-color: #FF5722;
+    background: rgba(255, 87, 34, 0.05);
+}
+
+.thinking-step.strategic-analysis {
+    border-left-color: #3F51B5;
+    background: rgba(63, 81, 181, 0.05);
+}
+
+.thinking-step.candidate-moves {
+    border-left-color: #FF9800;
+    background: rgba(255, 152, 0, 0.05);
+}
+
+.thinking-step.deep-evaluation {
+    border-left-color: #9C27B0;
+    background: rgba(156, 39, 176, 0.05);
+}
+
+.thinking-step.refinement {
+    border-left-color: #607D8B;
+    background: rgba(96, 125, 139, 0.05);
+}
+
+@keyframes deepThinkingPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4);
+        border-color: rgba(76, 175, 80, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(76, 175, 80, 0.1);
+        border-color: rgba(76, 175, 80, 0.6);
+    }
+}
+
+@keyframes brainPulse {
+    0%, 100% {
+        transform: scale(1);
+        color: var(--accent-color);
+    }
+    50% {
+        transform: scale(1.1);
+        color: #2196F3;
+    }
+}
+
+@keyframes waveExpand {
+    0% {
+        width: 20px;
+        height: 20px;
+        opacity: 1;
+    }
+    100% {
+        width: 60px;
+        height: 60px;
+        opacity: 0;
+    }
+}
+
+/* Enhanced thinking content scrolling */
+.thinking-content {
+    scroll-behavior: smooth;
+}
+
+.thinking-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.thinking-content::-webkit-scrollbar-track {
+    background: var(--background);
+    border-radius: 4px;
+}
+
+.thinking-content::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--accent-color), #2196F3);
+    border-radius: 4px;
+}
+
+.thinking-content::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #45a049, #1976D2);
 }
