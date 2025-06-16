@@ -15,9 +15,15 @@ class ChessUI {
             this.thinkingDisplay
         );
 
+        // Mobile navigation state
+        this.currentMobileTab = 'board';
+        this.isMobile = window.innerWidth < 768;
+
         // Initialize components and bind events
         this.initializeComponents();
         this.bindEvents();
+        this.setupMobileNavigation();
+        this.setupResponsiveLayout();
         
         // Set up LLM thinking callback
         this.llm.setThinkingCallback((steps) => this.thinkingDisplay.updateThinkingDisplay(steps));
@@ -32,28 +38,152 @@ class ChessUI {
     initializeComponents() {
         // Initialize board
         this.boardManager.initializeBoard();
+        
+        // Set initial mobile view
+        if (this.isMobile) {
+            this.showMobileSection('board');
+        }
+    }
+
+    setupMobileNavigation() {
+        const navTabs = document.querySelectorAll('.nav-tab');
+        navTabs.forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                const tabName = tab.dataset.tab;
+                this.switchMobileTab(tabName);
+            });
+        });
+    }
+
+    setupResponsiveLayout() {
+        // Listen for window resize to adjust layout
+        window.addEventListener('resize', () => {
+            const wasMobile = this.isMobile;
+            this.isMobile = window.innerWidth < 768;
+            
+            if (wasMobile !== this.isMobile) {
+                if (this.isMobile) {
+                    this.showMobileSection(this.currentMobileTab);
+                } else {
+                    this.showAllSections();
+                }
+            }
+        });
+        
+        // Initial setup
+        if (this.isMobile) {
+            this.showMobileSection('board');
+        } else {
+            this.showAllSections();
+        }
+    }
+
+    switchMobileTab(tabName) {
+        // Update active tab
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+        
+        this.currentMobileTab = tabName;
+        this.showMobileSection(tabName);
+    }
+
+    showMobileSection(sectionName) {
+        if (!this.isMobile) return;
+        
+        const sections = {
+            'board': 'board-section',
+            'thinking': 'thinking-section',
+            'history': 'history-section',
+            'controls': 'controls-section',
+            'settings': 'settings-section'
+        };
+        
+        // Hide all sections
+        Object.values(sections).forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.style.display = 'none';
+            }
+        });
+        
+        // Show selected section
+        const targetSection = document.getElementById(sections[sectionName]);
+        if (targetSection) {
+            targetSection.style.display = 'block';
+        }
+        
+        // Special handling for board section
+        if (sectionName === 'board') {
+            const boardContainer = document.querySelector('.game-board-container');
+            if (boardContainer) {
+                boardContainer.style.display = 'block';
+            }
+        }
+    }
+
+    showAllSections() {
+        const sections = [
+            'board-section',
+            'thinking-section', 
+            'history-section',
+            'controls-section',
+            'settings-section'
+        ];
+        
+        sections.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.style.display = 'block';
+            }
+        });
+        
+        const boardContainer = document.querySelector('.game-board-container');
+        if (boardContainer) {
+            boardContainer.style.display = 'block';
+        }
     }
 
     bindEvents() {
         // Connect the modules through event binding
         
-        // Board interaction events
+        // Board interaction events with improved touch handling
         this.boardManager.boardElement.addEventListener('click', (e) => {
             if (this.moveHandler.isWaitingForLLM) return;
             
             const square = e.target.closest('.square');
             if (square) {
+                e.preventDefault();
                 this.gameController.handleSquareClick(square.dataset.square);
+            }
+        });
+
+        // Touch events for better mobile interaction
+        let touchStartTime = 0;
+        this.boardManager.boardElement.addEventListener('touchstart', (e) => {
+            touchStartTime = Date.now();
+        });
+
+        this.boardManager.boardElement.addEventListener('touchend', (e) => {
+            const touchDuration = Date.now() - touchStartTime;
+            if (touchDuration < 500) { // Treat as tap if less than 500ms
+                const square = e.target.closest('.square');
+                if (square && !this.moveHandler.isWaitingForLLM) {
+                    e.preventDefault();
+                    this.gameController.handleSquareClick(square.dataset.square);
+                }
             }
         });
 
         // Game control buttons
         document.getElementById('new-game-btn').addEventListener('click', () => {
             this.gameController.startNewGame();
+            if (this.isMobile) {
+                this.switchMobileTab('board');
+            }
         });
 
         document.getElementById('undo-btn').addEventListener('click', () => {
-            // Implement undo through game controller
             this.gameController.undoMove();
         });
 
@@ -65,23 +195,40 @@ class ChessUI {
         document.getElementById('new-game-modal-btn').addEventListener('click', () => {
             this.closeModal();
             this.gameController.startNewGame();
+            if (this.isMobile) {
+                this.switchMobileTab('board');
+            }
         });
 
         document.getElementById('close-modal-btn').addEventListener('click', () => {
             this.closeModal();
         });
 
-        // Settings events
+        // Settings events with improved mobile UX
         document.getElementById('llm-provider').addEventListener('change', (e) => {
             this.settingsManager.handleProviderChange(e.target.value);
             this.testConnection();
+            
+            // Update AI player label
+            const aiLabel = document.getElementById('ai-player-label');
+            if (e.target.value === 'openai') {
+                aiLabel.textContent = 'OpenAI (Black)';
+            } else {
+                aiLabel.textContent = 'AI (Black)';
+            }
         });
 
-        // Temperature slider
-        document.getElementById('llm-temperature').addEventListener('input', (e) => {
+        // Temperature slider with live feedback
+        const temperatureSlider = document.getElementById('llm-temperature');
+        const temperatureValue = document.getElementById('temperature-value');
+        
+        temperatureSlider.addEventListener('input', (e) => {
             const value = parseFloat(e.target.value);
-            document.getElementById('temperature-value').textContent = value.toFixed(1);
+            temperatureValue.textContent = value.toFixed(1);
             this.llm.setTemperature(value);
+        });
+        
+        temperatureSlider.addEventListener('change', () => {
             this.settingsManager.saveSettings();
         });
 
@@ -97,8 +244,10 @@ class ChessUI {
             this.testConnection();
         });
 
-        // OpenAI settings
-        document.getElementById('openai-api-key').addEventListener('input', (e) => {
+        // OpenAI settings with improved feedback
+        const apiKeyInput = document.getElementById('openai-api-key');
+        
+        apiKeyInput.addEventListener('input', (e) => {
             const apiKey = e.target.value.trim();
             this.llm.setOpenAIApiKey(apiKey);
             
@@ -111,7 +260,7 @@ class ChessUI {
             }, 1000);
         });
 
-        document.getElementById('openai-api-key').addEventListener('paste', (e) => {
+        apiKeyInput.addEventListener('paste', (e) => {
             setTimeout(() => {
                 const apiKey = e.target.value.trim();
                 if (apiKey.startsWith('sk-')) {
@@ -122,12 +271,52 @@ class ChessUI {
             }, 100);
         });
 
+        // OpenAI model selection
+        document.getElementById('openai-model').addEventListener('change', (e) => {
+            this.llm.setOpenAIModel(e.target.value);
+            this.settingsManager.saveSettings();
+        });
+
         this.settingsManager.addClearApiKeyButton();
 
         // Thinking toggle
         document.getElementById('thinking-toggle').addEventListener('change', (e) => {
             this.thinkingDisplay.isThinkingVisible = e.target.checked;
-            document.getElementById('thinking-content').classList.toggle('hidden', !this.thinkingDisplay.isThinkingVisible);
+            const thinkingContent = document.getElementById('thinking-content');
+            thinkingContent.classList.toggle('hidden', !this.thinkingDisplay.isThinkingVisible);
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            
+            switch(e.key) {
+                case 'n':
+                case 'N':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        this.gameController.startNewGame();
+                    }
+                    break;
+                case 'u':
+                case 'U':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        this.gameController.undoMove();
+                    }
+                    break;
+                case 'h':
+                case 'H':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        this.getHint();
+                    }
+                    break;
+                case 'Escape':
+                    this.closeModal();
+                    this.boardManager.clearSelection();
+                    break;
+            }
         });
 
         // Test connection on startup
@@ -143,14 +332,33 @@ class ChessUI {
         if (this.engine.currentPlayer !== 'white' || this.moveHandler.isWaitingForLLM) return;
 
         try {
+            // Show loading state
+            const hintBtn = document.getElementById('hint-btn');
+            const originalText = hintBtn.innerHTML;
+            hintBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Getting hint...</span>';
+            hintBtn.disabled = true;
+
             this.thinkingDisplay.showThinking(true);
             const hint = await this.llm.getHint(this.engine, this.engine.moveHistory, 'white');
             this.thinkingDisplay.showThinking(false);
             
-            alert(`Hint: ${hint}`);
+            // Show hint in a more mobile-friendly way
+            if (this.isMobile) {
+                // For mobile, switch to thinking tab and show hint there
+                this.thinkingDisplay.addCustomThinking('Hint', hint);
+                this.switchMobileTab('thinking');
+            } else {
+                // For desktop, show in alert
+                alert(`Hint: ${hint}`);
+            }
         } catch (error) {
             this.thinkingDisplay.showThinking(false);
             this.gameController.showError('Could not get hint: ' + error.message);
+        } finally {
+            // Restore button
+            const hintBtn = document.getElementById('hint-btn');
+            hintBtn.innerHTML = '<i class="fas fa-lightbulb"></i> <span>Get Hint</span>';
+            hintBtn.disabled = false;
         }
     }
 
@@ -168,12 +376,12 @@ class ChessUI {
         
         if (result.success) {
             statusElement.classList.add('connected');
-            icon.className = 'fas fa-circle';
+            icon.className = 'fas fa-check-circle';
             const providerName = this.llm.provider === 'openai' ? 'OpenAI' : 'LM Studio';
             text.textContent = `Connected to ${providerName}`;
         } else {
             statusElement.classList.add('error');
-            icon.className = 'fas fa-circle';
+            icon.className = 'fas fa-exclamation-circle';
             text.textContent = 'Connection failed';
         }
     }

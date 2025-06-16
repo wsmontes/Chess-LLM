@@ -3,17 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Chess vs LLM</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>Chess LLM - Play Chess Against AI</title>
+    <meta name="description" content="Play chess against AI powered by local LLM or OpenAI. Beautiful, responsive chess game with thinking visualization.">
+    
+    <!-- Preload critical resources -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    
+    <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 448 512'%3E%3Cpath fill='%232e7d32' d='M96 48L82.7 61.3C70.7 73.3 64 89.5 64 106.5V238.9c0 10.7 5.3 20.7 14.2 26.6l10.6 7.1c-23.9 5.4-41.7 27-41.7 52.4c0 30.9 25.1 56 56 56c22 0 41.2-12.9 50.2-31.5c.7-1.5 1.1-3.2 1.1-4.9c0-4.7-2.9-8.9-7.3-10.6l-32.2-12.2c-3.1-1.2-5.3-4.1-5.3-7.4V288h19.3l11 66.2c1.6 9.8 10.1 16.9 20 16.9c14.6 0 26.5-12.2 25.9-26.8L180.9 288H224c70.7 0 128-57.3 128-128s-57.3-128-128-128H96zM164.7 384c-5.3 9.3-15.3 16-27.5 16c-17.5 0-31.7-14.3-31.7-32s14.2-32 31.7-32c12.2 0 22.2 6.7 27.5 16h-27.5c-8.8 0-16 7.2-16 16s7.2 16 16 16h27.5zM300.9 102.3c10.1 10.1 10.1 26.5 0 36.6s-26.5 10.1-36.6 0L240 114.7V192c0 17.7-14.3 32-32 32s-32-14.3-32-32V114.7l-24.2 24.2c-10.1 10.1-26.5 10.1-36.6 0s-10.1-26.5 0-36.6L170.5 47c6.2-6.2 14.4-9.4 22.7-9c8.3.4 16.3 4.1 22.1 10.5L248 85l32.8-36.5c5.8-6.4 13.7-10.1 22.1-10.5c8.2-.4 16.5 2.8 22.7 9l-24.7 55.3z'/%3E%3C/svg%3E">
-    <meta name="theme-color" content="#2e7d32">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#2563eb">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Chess LLM">
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <header class="game-header">
-            <h1><i class="fas fa-chess-knight"></i> Chess vs LLM</h1>
+            <h1>
+                <i class="fas fa-chess-king"></i>
+                <span>Chess LLM</span>
+            </h1>
             <div class="game-info">
                 <div class="player-info">
                     <div class="player human-player">
@@ -22,21 +40,44 @@
                     </div>
                     <div class="player ai-player">
                         <i class="fas fa-robot"></i>
-                        <span id="ai-player-label">LLM (Black)</span>
+                        <span id="ai-player-label">AI (Black)</span>
                     </div>
                 </div>
                 <div class="game-status">
                     <span id="status-text">Your turn - White to move</span>
                     <div class="thinking-indicator" id="thinking-indicator">
                         <i class="fas fa-cog fa-spin"></i>
-                        <span>LLM is thinking...</span>
+                        <span>AI is thinking...</span>
                     </div>
                 </div>
             </div>
         </header>
 
+        <!-- Mobile Navigation -->
+        <nav class="mobile-nav" id="mobile-nav">
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-tab="board">
+                    <i class="fas fa-chess-board"></i> Board
+                </button>
+                <button class="nav-tab" data-tab="thinking">
+                    <i class="fas fa-brain"></i> AI Thinking
+                </button>
+                <button class="nav-tab" data-tab="history">
+                    <i class="fas fa-history"></i> History
+                </button>
+                <button class="nav-tab" data-tab="controls">
+                    <i class="fas fa-gamepad"></i> Controls
+                </button>
+                <button class="nav-tab" data-tab="settings">
+                    <i class="fas fa-cogs"></i> Settings
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Game Area -->
         <main class="game-container">
-            <div class="game-board-container">
+            <!-- Chess Board Section -->
+            <section class="game-board-container" id="board-section">
                 <div class="board-wrapper">
                     <div class="coordinate-labels">
                         <div class="rank-labels">
@@ -49,7 +90,7 @@
                             <div class="rank-label">2</div>
                             <div class="rank-label">1</div>
                         </div>
-                        <div class="chess-board" id="chess-board">
+                        <div class="chess-board" id="chess-board" role="grid" aria-label="Chess board">
                             <!-- Board squares will be generated by JavaScript -->
                         </div>
                         <div class="file-labels">
@@ -64,112 +105,177 @@
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="game-panel">
-                <div class="game-controls">
-                    <button class="control-btn new-game-btn" id="new-game-btn">
-                        <i class="fas fa-plus"></i> New Game
-                    </button>
-                    <button class="control-btn undo-btn" id="undo-btn" disabled>
-                        <i class="fas fa-undo"></i> Undo
-                    </button>
-                    <button class="control-btn hint-btn full-width" id="hint-btn">
-                        <i class="fas fa-lightbulb"></i> Get Hint
-                    </button>
-                </div>
-
-                <div class="move-history">
-                    <h3><i class="fas fa-history"></i> Move History</h3>
-                    <div class="moves-container" id="moves-container">
-                        <div class="no-moves">Game hasn't started yet</div>
-                    </div>
-                </div>
-
-                <div class="llm-thinking">
-                    <h3>
-                        <span><i class="fas fa-brain"></i> LLM Thinking</span>
+            <!-- Game Panel -->
+            <aside class="game-panel">
+                <!-- AI Thinking Panel -->
+                <section class="panel-section" id="thinking-section">
+                    <div class="panel-header">
+                        <h3>
+                            <i class="fas fa-brain"></i>
+                            AI Thinking Process
+                        </h3>
                         <label class="thinking-toggle">
-                            <input type="checkbox" id="thinking-toggle" checked>
-                            <span>Show</span>
+                            <input type="checkbox" id="thinking-toggle" checked aria-label="Show AI thinking process">
+                            <span>Show thinking</span>
                         </label>
-                    </h3>
-                    <div class="thinking-content" id="thinking-content"></div>
-                </div>
-
-                <div class="llm-settings">
-                    <h3><i class="fas fa-cogs"></i> LLM Settings</h3>
-                    
-                    <div class="setting-group">
-                        <label for="llm-provider">Provider:</label>
-                        <select id="llm-provider">
-                            <option value="lmstudio">LM Studio (Local)</option>
-                            <option value="openai">OpenAI GPT</option>
-                        </select>
                     </div>
-
-                    <div id="lmstudio-settings">
-                        <div class="setting-group">
-                            <label for="llm-model">Model:</label>
-                            <input type="text" id="llm-model" value="google/gemma-3-4b" placeholder="Model name">
-                        </div>
-                        <div class="setting-group">
-                            <label for="llm-endpoint">Endpoint:</label>
-                            <input type="text" id="llm-endpoint" value="http://localhost:1234" placeholder="LM Studio endpoint">
-                        </div>
-                    </div>
-
-                    <div id="openai-settings" style="display: none;">
-                        <div class="setting-group">
-                            <label for="openai-api-key">API Key:</label>
-                            <input type="password" id="openai-api-key" placeholder="sk-..." autocomplete="off">
-                            <small class="setting-help">API key stored securely in browser</small>
-                            <div class="security-notice">
-                                <i class="fas fa-shield-alt"></i>
-                                Your key is encrypted and stored locally only
+                    <div class="panel-content">
+                        <div class="thinking-content" id="thinking-content" role="log" aria-live="polite" aria-label="AI thinking process">
+                            <div class="thinking-placeholder">
+                                AI thinking process will appear here during moves
                             </div>
                         </div>
-                        <div class="setting-group">
-                            <label for="openai-model">Model:</label>
-                            <select id="openai-model">
-                                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                                <option value="gpt-3.5-turbo-1106">GPT-3.5 Turbo (Nov 2023)</option>
-                                <option value="gpt-4">GPT-4</option>
-                                <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
-                            </select>
+                    </div>
+                </section>
+
+                <!-- Move History Panel -->
+                <section class="panel-section" id="history-section">
+                    <div class="panel-header">
+                        <h3>
+                            <i class="fas fa-history"></i>
+                            Move History
+                        </h3>
+                    </div>
+                    <div class="panel-content">
+                        <div class="moves-container" id="moves-container" role="log" aria-live="polite" aria-label="Move history">
+                            <div class="no-moves">Game hasn't started yet</div>
                         </div>
                     </div>
+                </section>
 
-                    <div class="setting-group">
-                        <label for="llm-temperature">Temperature: <span id="temperature-value">0.3</span></label>
-                        <input type="range" id="llm-temperature" min="0" max="1" step="0.1" value="0.3">
+                <!-- Game Controls Panel -->
+                <section class="panel-section" id="controls-section">
+                    <div class="panel-header">
+                        <h3>
+                            <i class="fas fa-gamepad"></i>
+                            Game Controls
+                        </h3>
                     </div>
-                    
-                    <div class="connection-status" id="connection-status">
-                        <i class="fas fa-circle"></i>
-                        <span>Not connected</span>
+                    <div class="panel-content">
+                        <div class="game-controls">
+                            <button class="control-btn success" id="new-game-btn" aria-label="Start a new game">
+                                <i class="fas fa-plus"></i>
+                                <span>New Game</span>
+                            </button>
+                            <button class="control-btn secondary" id="undo-btn" disabled aria-label="Undo last move">
+                                <i class="fas fa-undo"></i>
+                                <span>Undo</span>
+                            </button>
+                            <button class="control-btn" id="hint-btn" aria-label="Get a hint for your next move">
+                                <i class="fas fa-lightbulb"></i>
+                                <span>Get Hint</span>
+                            </button>
+                        </div>
                     </div>
-                </div>
-            </div>
+                </section>
+
+                <!-- Settings Panel -->
+                <section class="panel-section" id="settings-section">
+                    <div class="panel-header">
+                        <h3>
+                            <i class="fas fa-cogs"></i>
+                            AI Settings
+                        </h3>
+                    </div>
+                    <div class="panel-content">
+                        <div class="setting-group">
+                            <label for="llm-provider">AI Provider:</label>
+                            <select id="llm-provider" aria-describedby="provider-help">
+                                <option value="lmstudio">LM Studio (Local)</option>
+                                <option value="openai">OpenAI GPT (Cloud)</option>
+                            </select>
+                            <small class="setting-help" id="provider-help">
+                                Choose between local AI (free, private) or cloud AI (paid, more powerful)
+                            </small>
+                        </div>
+
+                        <!-- LM Studio Settings -->
+                        <div id="lmstudio-settings">
+                            <div class="setting-group">
+                                <label for="llm-model">Model Name:</label>
+                                <input type="text" id="llm-model" value="google/gemma-3-4b" placeholder="Enter model name" aria-describedby="model-help">
+                                <small class="setting-help" id="model-help">
+                                    Model name as shown in LM Studio
+                                </small>
+                            </div>
+                            <div class="setting-group">
+                                <label for="llm-endpoint">API Endpoint:</label>
+                                <input type="text" id="llm-endpoint" value="http://localhost:1234" placeholder="http://localhost:1234" aria-describedby="endpoint-help">
+                                <small class="setting-help" id="endpoint-help">
+                                    LM Studio server URL (usually localhost:1234)
+                                </small>
+                            </div>
+                        </div>
+
+                        <!-- OpenAI Settings -->
+                        <div id="openai-settings" style="display: none;">
+                            <div class="setting-group">
+                                <label for="openai-api-key">API Key:</label>
+                                <input type="password" id="openai-api-key" placeholder="sk-..." autocomplete="off" aria-describedby="apikey-help">
+                                <small class="setting-help" id="apikey-help">
+                                    Your OpenAI API key (stored securely in browser)
+                                </small>
+                                <div class="security-notice">
+                                    <i class="fas fa-shield-alt"></i>
+                                    Your API key is encrypted and stored locally. It never leaves your device except for API calls to OpenAI.
+                                </div>
+                            </div>
+                            <div class="setting-group">
+                                <label for="openai-model">Model:</label>
+                                <select id="openai-model" aria-describedby="openai-model-help">
+                                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Fast & Affordable)</option>
+                                    <option value="gpt-3.5-turbo-1106">GPT-3.5 Turbo (Latest)</option>
+                                    <option value="gpt-4">GPT-4 (Most Capable)</option>
+                                    <option value="gpt-4-turbo-preview">GPT-4 Turbo (Best Performance)</option>
+                                </select>
+                                <small class="setting-help" id="openai-model-help">
+                                    Higher quality models cost more per move
+                                </small>
+                            </div>
+                        </div>
+
+                        <div class="setting-group">
+                            <label for="llm-temperature">
+                                Creativity Level: 
+                                <span id="temperature-value">0.3</span>
+                            </label>
+                            <input type="range" id="llm-temperature" min="0" max="1" step="0.1" value="0.3" aria-describedby="temperature-help">
+                            <small class="setting-help" id="temperature-help">
+                                Higher values make the AI more creative but less predictable
+                            </small>
+                        </div>
+                        
+                        <div class="connection-status" id="connection-status" role="status" aria-live="polite">
+                            <i class="fas fa-circle"></i>
+                            <span>Not connected</span>
+                        </div>
+                    </div>
+                </section>
+            </aside>
         </main>
     </div>
 
-    <div class="modal" id="game-over-modal">
+    <!-- Game Over Modal -->
+    <div class="modal" id="game-over-modal" role="dialog" aria-labelledby="game-result-title" aria-describedby="game-result-message">
         <div class="modal-content">
             <h2 id="game-result-title">Game Over</h2>
             <p id="game-result-message">The game has ended.</p>
             <div class="modal-actions">
-                <button class="control-btn" id="new-game-modal-btn">
-                    <i class="fas fa-plus"></i> New Game
+                <button class="control-btn success" id="new-game-modal-btn">
+                    <i class="fas fa-plus"></i>
+                    <span>New Game</span>
                 </button>
                 <button class="control-btn secondary" id="close-modal-btn">
-                    <i class="fas fa-times"></i> Close
+                    <i class="fas fa-times"></i>
+                    <span>Close</span>
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- Load scripts in proper dependency order -->
+    <!-- Scripts - loaded in dependency order -->
     <script src="secure-storage.js"></script>
     <script src="chess-engine.js"></script>
     <script src="llm-client.js"></script>
@@ -179,9 +285,6 @@
     <script src="ui/move-handler.js"></script>
     <script src="ui/game-controller.js"></script>
     <script src="chess-ui.js"></script>
-    <script src="main.js"></script>
-</body>
-</html>
     <script src="main.js"></script>
 </body>
 </html>
