@@ -79,6 +79,7 @@ class GameController {
         if (this.engine.gameState === 'checkmate' || 
             this.engine.gameState === 'stalemate' || 
             this.engine.gameState === 'draw') {
+            console.log('Game is already over, not requesting LLM move');
             return;
         }
         
@@ -87,8 +88,8 @@ class GameController {
         const timeoutId = setTimeout(() => {
             abortController.abort();
             console.error("LLM move process timed out globally");
-            this.showError("LLM move timed out - game recovered automatically");
-            this.recoverFromFailedMove();
+            this.showError("LLM move timed out - checking game state");
+            this.checkAndHandleGameOver();
         }, 60000); // 60 second global timeout
         
         try {
@@ -113,6 +114,9 @@ class GameController {
                     this.engine.gameState === 'draw') {
                     this.handleGameEnd();
                 }
+            } else {
+                // No move returned - check if game is over
+                this.checkAndHandleGameOver();
             }
 
         } catch (error) {
@@ -120,6 +124,12 @@ class GameController {
             console.error('Error getting LLM move:', error);
             
             this.thinkingDisplay.addErrorToThinking(error.message);
+            
+            // Check if this is a game over situation
+            if (this.checkAndHandleGameOver()) {
+                return; // Game is over, no need for recovery
+            }
+            
             this.showError(`LLM move error: ${error.message}`);
             
             // Give player a chance to see the error before auto-recovery
@@ -134,10 +144,31 @@ class GameController {
         }
     }
 
+    // Add method to check and handle game over conditions
+    checkAndHandleGameOver() {
+        // Force update of game state
+        this.engine.updateGameEndingConditions();
+        
+        if (this.engine.gameState === 'checkmate' || 
+            this.engine.gameState === 'stalemate' || 
+            this.engine.gameState === 'draw') {
+            console.log('Game is over:', this.engine.gameState);
+            this.handleGameEnd();
+            return true;
+        }
+        
+        return false;
+    }
+
     // Add a recovery method for failed LLM moves
     async recoverFromFailedMove() {
         try {
             console.log("Attempting to recover from failed move...");
+            
+            // First check if game is actually over
+            if (this.checkAndHandleGameOver()) {
+                return true; // Game is over, no recovery needed
+            }
             
             // Try to make a random move as recovery
             const move = await this.moveHandler.makeRandomMove();
@@ -151,13 +182,21 @@ class GameController {
                 this.updateStatus();
                 
                 return true;
+            } else {
+                // No move returned - check if game is over
+                return this.checkAndHandleGameOver();
             }
         } catch (recoveryError) {
             console.error("Recovery failed:", recoveryError);
+            
+            // Last chance - check if game is over
+            if (this.checkAndHandleGameOver()) {
+                return true;
+            }
+            
             this.showError("Game state corrupted - Please start a new game");
+            return false;
         }
-        
-        return false;
     }
 
     handleGameEnd() {

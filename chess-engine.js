@@ -453,13 +453,19 @@ class ChessEngine {
         const inCheck = this.isKingInCheck(currentColor);
         const hasValidMoves = this.hasValidMovesForPlayer(currentColor);
 
-        // Modified logic: Let LLM decide checkmate, engine only handles stalemate and draws
-        if (!inCheck && !hasValidMoves) {
-            this.gameState = 'stalemate';
+        // Check for game ending conditions
+        if (!hasValidMoves) {
+            if (inCheck) {
+                // No valid moves + in check = checkmate
+                this.gameState = 'checkmate';
+            } else {
+                // No valid moves + not in check = stalemate
+                this.gameState = 'stalemate';
+            }
         } else if (this.halfmoveClock >= 100) {
             this.gameState = 'draw';
         } else if (inCheck) {
-            // Always set to 'check' - let LLM decide if it's checkmate
+            // In check but has valid moves = check
             this.gameState = 'check';
         } else {
             this.gameState = 'playing';

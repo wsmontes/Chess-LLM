@@ -171,6 +171,12 @@ class MoveHandler {
     async getLLMMove(previousAttempt = null, attemptCount = 0) {
         if (this.isWaitingForLLM) return;
         
+        // Check if game is already over before attempting to get a move
+        if (this.engine.isGameOver && this.engine.isGameOver()) {
+            console.log('Game is already over, not requesting LLM move');
+            return null;
+        }
+        
         const maxAttempts = 3;
         const moveTimeout = 35000; // 35 seconds
         this.isWaitingForLLM = true;
@@ -179,10 +185,7 @@ class MoveHandler {
         let moveTimeoutId = setTimeout(() => {
             console.warn('⚠️ LLM move timed out - forcing recovery');
             this.isWaitingForLLM = false;
-            // Force a random move and continue the game
-            this.makeRandomMove().catch(err => {
-                console.error("Random move fallback failed:", err);
-            });
+            this.handleGameOverState();
         }, moveTimeout);
 
         try {
@@ -235,8 +238,15 @@ class MoveHandler {
                     }, 1000);
                     return;
                 } else {
-                    console.warn('Maximum retry attempts reached, falling back to random move');
-                    throw new Error(`Couldn't get valid move after ${maxAttempts} attempts - using fallback`);
+                    console.warn('Maximum retry attempts reached, checking if game is over');
+                    // Check if we're in a game over state instead of trying random move
+                    if (this.isGameOverState()) {
+                        console.log('Game is over - no more moves needed');
+                        clearTimeout(moveTimeoutId);
+                        this.isWaitingForLLM = false;
+                        return null;
+                    }
+                    throw new Error(`Couldn't get valid move after ${maxAttempts} attempts - checking game state`);
                 }
             }
             
@@ -256,8 +266,15 @@ class MoveHandler {
             console.error('Error in LLM move process:', error);
             clearTimeout(moveTimeoutId);
             
-            // Make a random move as automatic fallback
-            return await this.makeRandomMove();
+            // Check if game is over before attempting fallback
+            if (this.isGameOverState()) {
+                console.log('Game is over - no fallback move needed');
+                this.isWaitingForLLM = false;
+                return null;
+            }
+            
+            // Only attempt random move if game is not over
+            return await this.handleGameOverState();
         } finally {
             // Always make sure we reset the waiting state
             this.isWaitingForLLM = false;
@@ -466,14 +483,21 @@ class MoveHandler {
     // Add a more robust random move method
     async makeRandomMove() {
         console.log('🎲 Making random move as fallback');
+        
+        // First check if we're in a game over state
+        if (this.isGameOverState()) {
+            console.log('Game is over - cannot make random move');
+            return null;
+        }
+        
         try {
             const possibleMoves = [];
             
-            // Gather all legal moves for black pieces
+            // Gather all legal moves for current player
             for (let rank = 0; rank < 8; rank++) {
                 for (let file = 0; file < 8; file++) {
                     const piece = this.engine.board[rank][file];
-                    if (piece && piece.color === 'black') {
+                    if (piece && piece.color === this.engine.currentPlayer) {
                         const square = this.engine.squareToString(file, rank);
                         const moves = this.engine.getValidMoves(square);
                         moves.forEach(move => {
@@ -484,7 +508,9 @@ class MoveHandler {
             }
             
             if (possibleMoves.length === 0) {
-                throw new Error('No valid moves for Black - game should be over');
+                console.log('No valid moves available - game should be over');
+                this.isGameOverState(); // This will set the proper game state
+                return null;
             }
             
             // Choose a move that develops a piece if possible
@@ -501,7 +527,62 @@ class MoveHandler {
             return this.engine.makeMove(moveToUse.from, moveToUse.to);
         } catch (error) {
             console.error('Failed to make random move:', error);
+            // Check if this is because game is over
+            if (this.isGameOverState()) {
+                return null;
+            }
             throw error;
         }
+    }
+
+    // Add helper method to check if game is in an over state
+    isGameOverState() {
+        // Check if current player has no valid moves
+        const hasValidMoves = this.hasValidMovesForCurrentPlayer();
+        
+        if (!hasValidMoves) {
+            // Update game state based on whether king is in check
+            const inCheck = this.engine.isKingInCheck(this.engine.currentPlayer);
+            
+            if (inCheck) {
+                this.engine.gameState = 'checkmate';
+                console.log(`${this.engine.currentPlayer} is in checkmate`);
+            } else {
+                this.engine.gameState = 'stalemate';
+                console.log(`${this.engine.currentPlayer} is in stalemate`);
+            }
+            
+            return true;
+        }
+        
+        return false;
+    }
+
+    // Add helper method to check if current player has valid moves
+    hasValidMovesForCurrentPlayer() {
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.engine.board[rank][file];
+                if (piece && piece.color === this.engine.currentPlayer) {
+                    const square = this.engine.squareToString(file, rank);
+                    const validMoves = this.engine.getValidMoves(square);
+                    if (validMoves.length > 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // Add method to handle game over state properly
+    async handleGameOverState() {
+        this.isWaitingForLLM = false;
+        
+        // Update the game state one more time to be sure
+        this.engine.updateGameEndingConditions();
+        
+        console.log('Handling game over state:', this.engine.gameState);
+        return null; // No move to return since game is over
     }
 }
