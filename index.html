@@ -2,16 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chess LLM</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chess vs LLM</title>
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 448 512'%3E%3Cpath fill='%232e7d32' d='M96 48L82.7 61.3C70.7 73.3 64 89.5 64 106.5V238.9c0 10.7 5.3 20.7 14.2 26.6l10.6 7.1c-23.9 5.4-41.7 27-41.7 52.4c0 30.9 25.1 56 56 56c22 0 41.2-12.9 50.2-31.5c.7-1.5 1.1-3.2 1.1-4.9c0-4.7-2.9-8.9-7.3-10.6l-32.2-12.2c-3.1-1.2-5.3-4.1-5.3-7.4V288h19.3l11 66.2c1.6 9.8 10.1 16.9 20 16.9c14.6 0 26.5-12.2 25.9-26.8L180.9 288H224c70.7 0 128-57.3 128-128s-57.3-128-128-128H96zM164.7 384c-5.3 9.3-15.3 16-27.5 16c-17.5 0-31.7-14.3-31.7-32s14.2-32 31.7-32c12.2 0 22.2 6.7 27.5 16h-27.5c-8.8 0-16 7.2-16 16s7.2 16 16 16h27.5zM300.9 102.3c10.1 10.1 10.1 26.5 0 36.6s-26.5 10.1-36.6 0L240 114.7V192c0 17.7-14.3 32-32 32s-32-14.3-32-32V114.7l-24.2 24.2c-10.1 10.1-26.5 10.1-36.6 0s-10.1-26.5 0-36.6L170.5 47c6.2-6.2 14.4-9.4 22.7-9c8.3.4 16.3 4.1 22.1 10.5L248 85l32.8-36.5c5.8-6.4 13.7-10.1 22.1-10.5c8.2-.4 16.5 2.8 22.7 9l-24.7 55.3z'/%3E%3C/svg%3E">
+    <meta name="theme-color" content="#2e7d32">
 </head>
 <body>
     <div class="container">
         <header class="game-header">
-            <h1><i class="fas fa-chess-king"></i> Chess LLM</h1>
+            <h1><i class="fas fa-chess-knight"></i> Chess vs LLM</h1>
             <div class="game-info">
                 <div class="player-info">
                     <div class="player human-player">
@@ -65,19 +67,16 @@
             </div>
 
             <div class="game-panel">
-                <div class="llm-thinking">
-                    <h3>
-                        <span><i class="fas fa-brain"></i> LLM Thinking Process</span>
-                        <label class="thinking-toggle">
-                            <input type="checkbox" id="thinking-toggle" checked>
-                            <span>Show thinking</span>
-                        </label>
-                    </h3>
-                    <div class="thinking-content" id="thinking-content">
-                        <div class="thinking-placeholder">
-                            LLM thinking process will appear here during moves
-                        </div>
-                    </div>
+                <div class="game-controls">
+                    <button class="control-btn new-game-btn" id="new-game-btn">
+                        <i class="fas fa-plus"></i> New Game
+                    </button>
+                    <button class="control-btn undo-btn" id="undo-btn" disabled>
+                        <i class="fas fa-undo"></i> Undo
+                    </button>
+                    <button class="control-btn hint-btn full-width" id="hint-btn">
+                        <i class="fas fa-lightbulb"></i> Get Hint
+                    </button>
                 </div>
 
                 <div class="move-history">
@@ -87,16 +86,15 @@
                     </div>
                 </div>
 
-                <div class="game-controls">
-                    <button class="control-btn new-game-btn" id="new-game-btn">
-                        <i class="fas fa-plus"></i> New Game
-                    </button>
-                    <button class="control-btn undo-btn" id="undo-btn" disabled>
-                        <i class="fas fa-undo"></i> Undo Move
-                    </button>
-                    <button class="control-btn hint-btn" id="hint-btn">
-                        <i class="fas fa-lightbulb"></i> Get Hint
-                    </button>
+                <div class="llm-thinking">
+                    <h3>
+                        <span><i class="fas fa-brain"></i> LLM Thinking</span>
+                        <label class="thinking-toggle">
+                            <input type="checkbox" id="thinking-toggle" checked>
+                            <span>Show</span>
+                        </label>
+                    </h3>
+                    <div class="thinking-content" id="thinking-content"></div>
                 </div>
 
                 <div class="llm-settings">
@@ -106,7 +104,7 @@
                         <label for="llm-provider">Provider:</label>
                         <select id="llm-provider">
                             <option value="lmstudio">LM Studio (Local)</option>
-                            <option value="openai">OpenAI GPT-3.5 Turbo</option>
+                            <option value="openai">OpenAI GPT</option>
                         </select>
                     </div>
 
@@ -125,10 +123,10 @@
                         <div class="setting-group">
                             <label for="openai-api-key">API Key:</label>
                             <input type="password" id="openai-api-key" placeholder="sk-..." autocomplete="off">
-                            <small class="setting-help">Your OpenAI API key (stored securely in browser)</small>
+                            <small class="setting-help">API key stored securely in browser</small>
                             <div class="security-notice">
                                 <i class="fas fa-shield-alt"></i>
-                                Your API key is encrypted and stored locally in your browser. It never leaves your device except when making API calls to OpenAI.
+                                Your key is encrypted and stored locally only
                             </div>
                         </div>
                         <div class="setting-group">
@@ -143,9 +141,8 @@
                     </div>
 
                     <div class="setting-group">
-                        <label for="llm-temperature">Temperature:</label>
+                        <label for="llm-temperature">Temperature: <span id="temperature-value">0.3</span></label>
                         <input type="range" id="llm-temperature" min="0" max="1" step="0.1" value="0.3">
-                        <span id="temperature-value">0.3</span>
                     </div>
                     
                     <div class="connection-status" id="connection-status">
@@ -182,6 +179,9 @@
     <script src="ui/move-handler.js"></script>
     <script src="ui/game-controller.js"></script>
     <script src="chess-ui.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
     <script src="main.js"></script>
 </body>
 </html>
