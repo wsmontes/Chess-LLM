@@ -146,7 +146,8 @@ body {
     gap: 8px;
     max-width: 600px;
     width: 100%;
-    height: 580px; /* 500px board + 40px labels + gaps */
+    height: auto; /* Changed: from fixed height to auto */
+    aspect-ratio: 1.1/1; /* Added: maintains proportions accounting for labels */
 }
 
 .rank-labels {
@@ -180,14 +181,15 @@ body {
     border: 3px solid var(--primary-color);
     border-radius: 8px;
     overflow: visible;
-    width: 500px;
-    height: 500px;
-    min-height: 500px;
-    max-width: 500px;
+    width: 100%; /* Changed: from 500px to responsive width */
+    height: auto; /* Changed: from fixed height to auto */
+    aspect-ratio: 1/1; /* Added: ensures square shape */
+    min-height: 0; /* Changed: remove min-height constraint */
+    max-width: 500px; /* Keeps max-width for large screens */
     box-shadow: var(--shadow);
     grid-row: 1;
     grid-column: 2;
-    background: #ff0000; /* Debug background */
+    background: transparent; /* Changed: removed debug red background */
 }
 
 .square {
@@ -198,8 +200,9 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
     user-select: none;
-    min-height: 60px;
-    min-width: 60px;
+    min-height: 0; /* Changed: remove min-height constraint */
+    min-width: 0; /* Changed: remove min-width constraint */
+    aspect-ratio: 1/1; /* Added: ensures squares remain square */
 }
 
 .square.light {
@@ -849,17 +852,19 @@ body {
         gap: 12px;
     }
     
+    /* Updated board dimensions for tablets */
     .chess-board {
-        max-width: 400px;
+        max-width: calc(100vw - 60px); /* Changed: dynamic width based on viewport */
     }
     
     .piece {
-        font-size: 2rem;
+        font-size: 1.8rem; /* Changed: smaller piece size */
     }
     
     .coordinate-labels {
-        grid-template-columns: 30px 1fr;
-        grid-template-rows: 1fr 30px;
+        grid-template-columns: 24px 1fr; /* Changed: smaller coordinate labels */
+        grid-template-rows: 1fr 24px;
+        gap: 4px; /* Changed: smaller gap */
     }
     
     .rank-label,
@@ -869,17 +874,55 @@ body {
 }
 
 @media (max-width: 480px) {
+    .container {
+        padding: 8px; /* Changed: smaller padding */
+    }
+    
+    .game-board-container {
+        padding: 12px; /* Changed: smaller padding */
+    }
+    
+    /* Updated board dimensions for phones */
     .chess-board {
-        max-width: 300px;
+        max-width: calc(100vw - 40px); /* Changed: maximize available space */
     }
     
     .piece {
-        font-size: 1.5rem;
+        font-size: 1.4rem; /* Changed: smaller piece size for phones */
     }
     
     .coordinate-labels {
-        grid-template-columns: 25px 1fr;
-        grid-template-rows: 1fr 25px;
+        grid-template-columns: 20px 1fr; /* Changed: even smaller labels */
+        grid-template-rows: 1fr 20px;
+        gap: 2px; /* Changed: minimal gap */
+    }
+    
+    .rank-label,
+    .file-label {
+        font-size: 0.7rem;
+    }
+}
+
+/* Added: support for very small screens */
+@media (max-width: 350px) {
+    .chess-board {
+        max-width: 100%;
+        border-width: 2px; /* Thinner border */
+    }
+    
+    .piece {
+        font-size: 1.2rem;
+    }
+    
+    .coordinate-labels {
+        grid-template-columns: 16px 1fr;
+        grid-template-rows: 1fr 16px;
+        gap: 1px;
+    }
+    
+    .rank-label,
+    .file-label {
+        font-size: 0.6rem;
     }
 }
 
