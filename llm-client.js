@@ -661,15 +661,35 @@ Analyze thoroughly and respond with either:
 
 End your response with just the word CHECKMATE or CHECK on its own line.`;
 
-            const userPrompt = this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck);
-
+            // Add timeout protection to prevent hanging
             let response;
-            if (this.provider === 'openai') {
-                response = await this.getOpenAIResponse(systemPrompt, userPrompt);
-            } else {
-                response = await this.getLMStudioResponse(systemPrompt, userPrompt);
+            const timeoutMs = 8000;
+            
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Check analysis timed out')), timeoutMs);
+            });
+            
+            try {
+                if (this.provider === 'openai') {
+                    response = await Promise.race([
+                        this.getOpenAIResponse(systemPrompt, this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck)),
+                        timeoutPromise
+                    ]);
+                } else {
+                    response = await Promise.race([
+                        this.getLMStudioResponse(systemPrompt, this.buildCheckAnalysisPrompt(gameState, moveHistory, playerInCheck)),
+                        timeoutPromise
+                    ]);
+                }
+            } catch (error) {
+                console.error('Error or timeout in LLM check analysis:', error);
+                
+                // Fall back to engine's own assessment if LLM fails
+                const isActualCheckmate = gameState.isActualCheckmate(playerInCheck);
+                console.log('Falling back to engine checkmate assessment:', isActualCheckmate);
+                return isActualCheckmate ? 'checkmate' : 'check';
             }
-
+            
             // Parse the response
             const lines = response.split('\n').map(line => line.trim()).filter(line => line);
             const lastLine = lines[lines.length - 1].toUpperCase();
@@ -690,15 +710,17 @@ End your response with just the word CHECKMATE or CHECK on its own line.`;
             } else if (lastLine === 'CHECK') {
                 return 'check';
             } else {
-                // Fallback: if response is unclear, assume it's just check
-                console.warn('LLM analysis unclear, defaulting to check:', response);
-                return 'check';
+                // Fallback: if response is unclear, use engine assessment
+                const engineAssessment = gameState.isActualCheckmate(playerInCheck) ? 'checkmate' : 'check';
+                console.warn('LLM analysis unclear, using engine assessment:', engineAssessment);
+                return engineAssessment;
             }
 
         } catch (error) {
             console.error('Error analyzing check position:', error);
-            // Fallback: assume it's just check if analysis fails
-            return 'check';
+            // Fallback to engine assessment if analysis fails
+            const isActualCheckmate = gameState.isActualCheckmate(playerInCheck);
+            return isActualCheckmate ? 'checkmate' : 'check';
         }
     }
 

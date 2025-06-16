@@ -473,9 +473,31 @@ class ChessEngine {
 
     // Add method to check if position is actually checkmate (for LLM analysis)
     isActualCheckmate(color) {
+        // First check if the king is in check
         const inCheck = this.isKingInCheck(color);
-        const hasValidMoves = this.hasValidMovesForPlayer(color);
-        return inCheck && !hasValidMoves;
+        if (!inCheck) {
+            return false;
+        }
+        
+        // Then check if there are any valid moves to get out of check
+        // Look for ANY valid move for this color
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.board[rank][file];
+                if (piece && piece.color === color) {
+                    const square = this.squareToString(file, rank);
+                    const validMoves = this.getValidMovesForSquare(square);
+                    if (validMoves.length > 0) {
+                        console.log(`Found valid move for ${color}: ${square} to ${validMoves[0]}`);
+                        return false;  // Not checkmate if ANY piece has a valid move
+                    }
+                }
+            }
+        }
+        
+        // If we get here, it's checkmate (king in check + no valid moves)
+        console.log(`Confirmed checkmate for ${color}`);
+        return true;
     }
 
     // Add method to get legal moves for any color (used by LLM analysis)

@@ -152,6 +152,112 @@ class ChessApp {
             timestamp: new Date().toISOString()
         };
     }
+
+    // Add recovery method to help users unstick the game
+    recoverGameState() {
+        try {
+            if (this.ui) {
+                const success = this.ui.recoverFromStuckState();
+                if (success) {
+                    console.log("Game state recovered successfully");
+                    return true;
+                }
+            }
+            
+            console.log("Basic recovery failed, attempting engine reset");
+            
+            // More aggressive recovery - keep game history but reset frozen states
+            if (this.engine && this.ui) {
+                const moveHistory = [...this.engine.moveHistory];
+                
+                // Only reset if we have a move history to restore
+                if (moveHistory.length > 0) {
+                    this.engine.reset();
+                    
+                    // Replay all moves except the last one if it might have caused the hang
+                    const movesToReplay = moveHistory.length > 1 ? 
+                        moveHistory.slice(0, -1) : moveHistory;
+                        
+                    for (const move of movesToReplay) {
+                        try {
+                            this.engine.makeMove(move.from, move.to);
+                        } catch (error) {
+                            console.error('Error replaying move:', error);
+                            break;
+                        }
+                    }
+                    
+                    this.ui.moveHandler.isWaitingForLLM = false;
+                    this.ui.gameController.updateDisplay();
+                    return true;
+                } else {
+                    // Just start a new game
+                    this.resetGame();
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            console.error("Failed to recover game state:", error);
+            return false;
+        }
+    }
+    
+    // Add a method to force LLM to make a move (useful to recover from stuck states)
+    forceLLMMove() {
+        if (this.ui) {
+            return this.ui.forceLLMMove();
+        }
+        return false;
+    }
+
+    // Add a method for forcing a random move (helpful when completely stuck)
+    forceRandomMove() {
+        if (this.ui && this.engine && this.engine.currentPlayer === 'black') {
+            return this.ui.forceRandomMove();
+        }
+        console.log("Cannot make random move - not Black's turn or UI not initialized");
+        return false;
+    }
+
+    // Add a game reset method that keeps the position but resets internal state
+    resetGameState() {
+        if (!this.engine || !this.ui) {
+            console.log("Cannot reset game state - engine or UI not initialized");
+            return false;
+        }
+        
+        try {
+            console.log("Resetting game state while preserving position...");
+            
+            // Save current position and history
+            const moveHistory = [...this.engine.moveHistory];
+            const currentPosition = this.engine.getBoardAsFEN();
+            const currentPlayer = this.engine.currentPlayer;
+            
+            // Reset core components
+            if (this.ui.moveHandler) {
+                this.ui.moveHandler.isWaitingForLLM = false;
+            }
+            
+            if (this.ui.thinkingDisplay) {
+                this.ui.thinkingDisplay.showThinking(false);
+                this.ui.thinkingDisplay.showThinkingStreamIndicator(false);
+            }
+            
+            // Update UI
+            if (this.ui.gameController) {
+                this.ui.gameController.updateDisplay();
+            }
+            
+            console.log("Game state reset - internal state cleared but position preserved");
+            return true;
+        } catch (error) {
+            console.error("Failed to reset game state:", error);
+            return false;
+        }
+    }
 }
 
 // Initialize the application
@@ -167,8 +273,12 @@ console.log(`
 Debug commands:
 - chessApp.getAppStatus() - Get application status
 - chessApp.testLLMConnection() - Test LLM connection
-- chessApp.resetGame() - Reset the game
+- chessApp.resetGame() - Start a completely new game
+- chessApp.resetGameState() - Reset internal state but keep position
 - chessApp.exportGame() - Export current game state
+- chessApp.recoverGameState() - Recover from stuck state
+- chessApp.forceLLMMove() - Force LLM to make a move (helps if Black's turn is stuck)
+- chessApp.forceRandomMove() - Force a random move for Black (when completely stuck)
 
 Enjoy playing chess against the LLM! 🏁
 `);

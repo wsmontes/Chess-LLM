@@ -172,8 +172,15 @@
         </div>
     </div>
 
+    <!-- Load scripts in proper dependency order -->
+    <script src="secure-storage.js"></script>
     <script src="chess-engine.js"></script>
     <script src="llm-client.js"></script>
+    <script src="ui/board-manager.js"></script>
+    <script src="ui/settings-manager.js"></script>
+    <script src="ui/thinking-display.js"></script>
+    <script src="ui/move-handler.js"></script>
+    <script src="ui/game-controller.js"></script>
     <script src="chess-ui.js"></script>
     <script src="main.js"></script>
 </body>
