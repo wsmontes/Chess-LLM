@@ -1120,6 +1120,54 @@ Make your final decision and provide the move with reasoning.`;
     buildDeepAnalysisUserPrompt(phase, previousKnowledge, previousCandidates) {
         const fen = this.engine.getBoardAsFEN();
         const moveHistory = this.engine.moveHistory.join(' ');
-        return `Analyze the current position and suggest the best move for Black.\n\nCurrent FEN: ${fen}\nMove History: ${moveHistory}`;
+        const materialBalance = this.engine.getMaterialBalance();
+        const isCheck = this.engine.isKingInCheck('black');
+        const legalMoves = this.engine.getLegalMovesForColor('black');
+
+        let prompt = `You are analyzing the position as Black. Focus on ${phase.focus}.\n\n`;
+        prompt += `Current Position:\n`;
+        prompt += `FEN: ${fen}\n`;
+        prompt += `Move History: ${moveHistory}\n\n`;
+        
+        prompt += `Position Assessment:\n`;
+        prompt += `- Material Balance: ${materialBalance > 0 ? '+' : ''}${materialBalance}\n`;
+        prompt += `- Black King in Check: ${isCheck ? 'Yes' : 'No'}\n`;
+        prompt += `- Available Legal Moves: ${legalMoves.join(', ')}\n\n`;
+        
+        prompt += `Analysis Guidelines:\n`;
+        prompt += `1. First, analyze the current position:\n`;
+        prompt += `   - Material balance and piece activity\n`;
+        prompt += `   - Pawn structure and weaknesses\n`;
+        prompt += `   - King safety and development\n`;
+        prompt += `   - Control of key squares and files\n\n`;
+        
+        prompt += `2. Identify immediate threats and opportunities:\n`;
+        prompt += `   - Tactical possibilities (checks, captures, threats)\n`;
+        prompt += `   - Strategic goals (development, space, initiative)\n`;
+        prompt += `   - Opponent's threats that need to be addressed\n\n`;
+        
+        prompt += `3. Evaluate candidate moves:\n`;
+        prompt += `   - Only consider legal moves from the list above\n`;
+        prompt += `   - Assess each move's impact on position\n`;
+        prompt += `   - Consider both immediate and long-term consequences\n\n`;
+        
+        if (previousKnowledge) {
+            prompt += `Previous Analysis:\n${previousKnowledge}\n\n`;
+        }
+        
+        if (previousCandidates && previousCandidates.length > 0) {
+            prompt += `Previous Candidate Moves: ${previousCandidates.join(', ')}\n\n`;
+        }
+        
+        prompt += `Please provide your analysis in this format:\n`;
+        prompt += `1. Position Assessment: [Your detailed analysis]\n`;
+        prompt += `2. Threats & Opportunities: [List key points]\n`;
+        prompt += `3. Candidate Moves:\n`;
+        prompt += `   - [Move 1]: [Brief explanation]\n`;
+        prompt += `   - [Move 2]: [Brief explanation]\n`;
+        prompt += `   - [Move 3]: [Brief explanation]\n`;
+        prompt += `4. Recommended Move: [Your choice with detailed reasoning]\n`;
+        
+        return prompt;
     }
 }

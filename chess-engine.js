@@ -788,15 +788,13 @@ class ChessEngine {
 
     // Enhanced position evaluation for better AI understanding
     getPositionEvaluation() {
-        const evaluation = {
-            material: this.getMaterialBalance(),
-            kingSafety: this.getKingSafetyScore(),
-            pieceActivity: this.getPieceActivityScore(),
-            pawnStructure: this.getPawnStructureScore(),
-            centerControl: this.getCenterControlScore()
-        };
+        // Simple position evaluation based on material and piece activity
+        const materialScore = this.getMaterialBalance();
+        const pieceActivityScore = this.getPieceActivityScore();
+        const centerControlScore = this.getCenterControlScore();
+        const kingSafetyScore = this.getKingSafetyScore();
         
-        return evaluation;
+        return materialScore + pieceActivityScore + centerControlScore + kingSafetyScore;
     }
 
     getMaterialBalance() {
