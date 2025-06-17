@@ -1117,5 +1117,9 @@ Make your final decision and provide the move with reasoning.`;
         return false;
     }
 
-    // ...existing code...
+    buildDeepAnalysisUserPrompt(phase, previousKnowledge, previousCandidates) {
+        const fen = this.engine.getBoardAsFEN();
+        const moveHistory = this.engine.moveHistory.join(' ');
+        return `Analyze the current position and suggest the best move for Black.\n\nCurrent FEN: ${fen}\nMove History: ${moveHistory}`;
+    }
 }
